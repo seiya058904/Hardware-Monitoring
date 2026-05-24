@@ -15,7 +15,6 @@ Releases
 v1.0.3
 https://github.com/seiya058904/Hardware-Monitoring/releases/tag/Hardware-Monitoring
 
-<img width="1074" height="1045" alt="1f696d5ba1c90d742e1a90a1bfbd53d7" src="https://github.com/user-attachments/assets/da3b3a55-e29f-4a3d-8e2c-3620104e129e" />
 
 <img width="475" height="902" alt="image" src="https://github.com/user-attachments/assets/8b3a7b37-8b3b-4df3-8617-d46968ff386f" />
 
