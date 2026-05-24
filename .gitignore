@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller build output
+build/
+dist/
+_internal/
+
+# Built executable, installer, archives
+Hardware Monitoring.exe
+HardwareMonitoring_Setup_*.exe
+*.7z
+
+# User runtime files
+config.json
+hardware_monitor.log
+
+# Screenshots / temp images
+*.png
+
+# Claude Code
+.claude/
