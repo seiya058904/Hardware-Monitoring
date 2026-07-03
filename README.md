@@ -1,3 +1,7 @@
+<img width="1254" height="1254" alt="Hardware monitoring" src="https://github.com/user-attachments/assets/11b6ff6b-830c-418a-89f9-98d1758eaa25" />
+
+
+
 <img width="1536" height="1024" alt="file_0000000058e471f8aaa3abb2ec4b7825" src="https://github.com/user-attachments/assets/b10c072e-64e5-4ac4-9adc-adc15a0957b4" />
 
 
