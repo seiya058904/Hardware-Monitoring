@@ -19,8 +19,8 @@ Releases
 v1.0.4
 https://github.com/seiya058904/Hardware-Monitoring/releases/tag/Hardware-Monitoring
 
-运行时配置和日志保存在 `%LOCALAPPDATA%\\Hardware Monitoring`。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
-卸载程序默认保留 `%LOCALAPPDATA%\\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
+运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
+卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
 
 <img width="475" height="902" alt="image" src="https://github.com/user-attachments/assets/8b3a7b37-8b3b-4df3-8617-d46968ff386f" />
 

@@ -23,7 +23,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('_internal/libs', 'libs'), ('_internal/app.ico', '.'), ('tools', 'tools')],
+    datas=[('_internal/libs', 'libs'), ('assets/app.ico', '.'), ('tools', 'tools')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -50,7 +50,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['_internal\\app.ico'],
+    icon=['assets\\app.ico'],
 )
 coll = COLLECT(
     exe,
