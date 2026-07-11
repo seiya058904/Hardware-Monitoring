@@ -34,13 +34,11 @@ Section "程序文件 (必需)" SecCore
   File /nonfatal "${DIST_DIR}\config.json"
   SetOutPath "$INSTDIR\_internal"
   File /r "${DIST_DIR}\_internal\*.*"
-  SetOutPath "$INSTDIR\tools"
-  File /r "tools\*.*"
 
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKLM "${UNINSTALL_KEY}" "UninstallString" "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKLM "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoRepair" 1
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -73,12 +71,12 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "HardwareMonitorMini"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
   Delete "$INSTDIR\Uninstall.exe"
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\用户须知.txt"
   Delete "$INSTDIR\config.json"
-  RMDir /r "$INSTDIR\tools"
   RMDir /r "$INSTDIR\_internal"
   RMDir "$INSTDIR"
 SectionEnd
