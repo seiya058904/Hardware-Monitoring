@@ -16,7 +16,7 @@ The product uses a compact window with grouped information for fast readability,
 With built-in Chinese/English language switching, Hardware Monitoring fits daily productivity, gaming observation, and routine hardware health checks. The overall experience focuses on out-of-box usability, intuitive configuration, and reliable operation, delivering professional monitoring insights with a low learning curve.
 
 Releases
-v1.0.4
+v1.0.6
 https://github.com/seiya058904/Hardware-Monitoring/releases/tag/Hardware-Monitoring
 
 运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
