@@ -1,5 +1,5 @@
 ﻿!define APP_NAME "Hardware Monitoring"
-!define APP_VERSION "1.0.4"
+!define APP_VERSION "1.0.6"
 !define APP_EXE "Hardware Monitoring.exe"
 !define DIST_DIR "dist\Hardware Monitoring"
 !define INSTALL_DIR "$PROGRAMFILES\${APP_NAME}"

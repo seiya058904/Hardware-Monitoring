@@ -24,7 +24,12 @@ except Exception:
     winreg = None
 
 try:
+    import pythonnet  # type: ignore
+
+    pythonnet.load()
     import clr  # type: ignore
+    if not hasattr(clr, "AddReference"):
+        clr = None
 except Exception:
     clr = None
 
@@ -297,9 +302,15 @@ class SensorReader:
             self._lhm_error = "pythonnet 未加载"
             return
 
-        dll_path = self._runtime_base_dir() / "libs" / "LibreHardwareMonitorLib.dll"
+        candidates = [
+            self._runtime_base_dir() / "libs" / "LibreHardwareMonitorLib.dll",
+            self._app_dir() / "_internal" / "libs" / "LibreHardwareMonitorLib.dll",
+            self._app_dir() / "libs" / "LibreHardwareMonitorLib.dll",
+        ]
+        dll_path = next((path for path in candidates if path.exists()), candidates[0])
         if not dll_path.exists():
             self._lhm_error = f"缺少 DLL: {dll_path}"
+            logging.getLogger("hardware_monitor").warning("LibreHardwareMonitor DLL missing: %s", dll_path)
             return
 
         try:
@@ -321,6 +332,7 @@ class SensorReader:
             self._lhm_computer = None
             self._lhm_hardware = None
             self._lhm_error = "LHM 初始化失败(运行库兼容性或驱动限制)"
+            logging.getLogger("hardware_monitor").exception("LibreHardwareMonitor initialization failed")
 
     def _start_external_lhm_if_available(self) -> None:
         base = self._app_dir()
