@@ -21,3 +21,6 @@ hardware_monitor.log
 
 # Claude Code
 .claude/
+
+# Local planning notes
+docs/
