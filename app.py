@@ -3,6 +3,7 @@ import ctypes.wintypes
 import csv
 import json
 import logging
+import os
 import shutil
 import tempfile
 import subprocess
@@ -28,6 +29,13 @@ except Exception:
     clr = None
 
 APP_NAME = "Hardware Monitoring"
+AUTOSTART_VALUE_NAME = APP_NAME
+LEGACY_AUTOSTART_VALUE_NAME = "HardwareMonitorMini"
+
+
+def runtime_data_dir() -> Path:
+    root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    return Path(root) / APP_NAME if root else Path.home() / "AppData" / "Local" / APP_NAME
 
 
 def setup_logger(app_dir: Path) -> logging.Logger:
@@ -37,6 +45,7 @@ def setup_logger(app_dir: Path) -> logging.Logger:
     logger.setLevel(logging.INFO)
     log_path = app_dir / "hardware_monitor.log"
     try:
+        app_dir.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(log_path, encoding="utf-8")
     except Exception:
         fallback = Path(tempfile.gettempdir()) / "hardware_monitor.log"
@@ -270,6 +279,7 @@ class SensorReader:
         self._last_io_ts = 0.0
         self._ping_cache: Optional[float] = None
         self._ping_cache_ts = 0.0
+        self._nvidia_smi = shutil.which("nvidia-smi")
         self._init_lhm()
 
     def _runtime_base_dir(self) -> Path:
@@ -590,8 +600,10 @@ class SensorReader:
         return max(temps) if temps else None
 
     def _fallback_gpu_temp(self) -> Optional[float]:
+        if not self._nvidia_smi:
+            return None
         out = self._run_cmd([
-            "nvidia-smi",
+            self._nvidia_smi,
             "--query-gpu=temperature.gpu",
             "--format=csv,noheader,nounits",
         ])
@@ -607,8 +619,10 @@ class SensorReader:
         return max(temps) if temps else None
 
     def _fallback_gpu_vram(self) -> Optional[dict]:
+        if not self._nvidia_smi:
+            return None
         out = self._run_cmd([
-            "nvidia-smi",
+            self._nvidia_smi,
             "--query-gpu=memory.used,memory.total",
             "--format=csv,noheader,nounits",
         ])
@@ -690,22 +704,28 @@ class SensorReader:
             return float(m.group(1))
         return None
 
-    def _read_fallback_values(self) -> Dict[str, Optional[float]]:
+    def _read_fallback_values(self, lhm: Dict[str, Optional[float]], config: dict) -> Dict[str, Optional[float]]:
         now = time.time()
-        if now - self._last_fallback_ts < 2:
+        needs_cpu_temp = bool(config.get("show_cpu_temperature", True)) and lhm.get("cpu_temp") is None
+        needs_gpu_temp = bool(config.get("show_gpu_temperature", True)) and lhm.get("gpu_temp") is None
+        needs_memory_freq = bool(config.get("show_memory_freq", False)) and lhm.get("memory_freq") is None
+        needs_vram = bool(config.get("show_vram_usage", True)) and (lhm.get("gpu_memory_used") is None or lhm.get("gpu_memory_total") is None)
+        needs_fallback = needs_cpu_temp or needs_gpu_temp or needs_memory_freq or needs_vram
+        if not needs_fallback:
+            return self._fallback_cache
+        if now - self._last_fallback_ts < 10:
             return self._fallback_cache
 
         self._last_fallback_ts = now
-        cpu_coretemp = self._read_coretemp_shared_memory()
-        cpu_wmi = self._fallback_cpu_temp()
-        cpu_ohm = self._fallback_ohm_wmi_cpu_temp()
-        cpu_lhm_wmi = self._fallback_lhm_wmi_cpu_temp()
-        gpu_smi = self._fallback_gpu_temp()
-        gpu_ohm = self._fallback_ohm_wmi_gpu_temp()
-        gpu_lhm_wmi = self._fallback_lhm_wmi_gpu_temp()
-        mem_wmi = self._fallback_memory_freq()
-
-        gpu_vram = self._fallback_gpu_vram()
+        cpu_coretemp = self._read_coretemp_shared_memory() if needs_cpu_temp else None
+        cpu_ohm = self._fallback_ohm_wmi_cpu_temp() if needs_cpu_temp and cpu_coretemp is None else None
+        cpu_lhm_wmi = self._fallback_lhm_wmi_cpu_temp() if needs_cpu_temp and cpu_coretemp is None and cpu_ohm is None else None
+        cpu_wmi = self._fallback_cpu_temp() if needs_cpu_temp and cpu_coretemp is None and cpu_ohm is None and cpu_lhm_wmi is None else None
+        gpu_smi = self._fallback_gpu_temp() if needs_gpu_temp else None
+        gpu_ohm = self._fallback_ohm_wmi_gpu_temp() if needs_gpu_temp and gpu_smi is None else None
+        gpu_lhm_wmi = self._fallback_lhm_wmi_gpu_temp() if needs_gpu_temp and gpu_smi is None and gpu_ohm is None else None
+        mem_wmi = self._fallback_memory_freq() if needs_memory_freq else None
+        gpu_vram = self._fallback_gpu_vram() if needs_vram else None
 
         self._fallback_cache = {
             "cpu_coretemp": cpu_coretemp,
@@ -731,7 +751,8 @@ class SensorReader:
         }
         return self._fallback_cache
 
-    def read_metrics(self) -> Metrics:
+    def read_metrics(self, config: Optional[dict] = None) -> Metrics:
+        config = config or DEFAULT_CONFIG
         metrics = Metrics()
         try:
             metrics.cpu_usage = f"{psutil.cpu_percent(interval=0.15):.0f}%"
@@ -746,7 +767,7 @@ class SensorReader:
             pass
 
         lhm = self._read_lhm_values()
-        fb = self._read_fallback_values()
+        fb = self._read_fallback_values(lhm, config)
 
         if lhm.get("cpu_usage") is not None:
             metrics.cpu_usage = f"{lhm['cpu_usage']:.0f}%"
@@ -825,7 +846,9 @@ class SensorReader:
         # Network latency (cached for 2 seconds)
         try:
             now = time.time()
-            if now - self._ping_cache_ts >= 2:
+            if not bool(config.get("show_network_latency", False)):
+                self._ping_cache = None
+            elif now - self._ping_cache_ts >= 10:
                 self._ping_cache = self._read_ping()
                 self._ping_cache_ts = now
             if self._ping_cache is not None:
@@ -1375,7 +1398,7 @@ class OverlayApp:
     def __init__(self, root: tk.Tk, config: dict) -> None:
         self.root = root
         self.config = config
-        self.logger = setup_logger(self._app_dir())
+        self.logger = setup_logger(runtime_data_dir())
         self.config["autostart"] = self._is_autostart_enabled()
         self.sensor_reader = SensorReader()
         self.fps_service = FpsService(self._app_dir(), self._runtime_base_dir(), self.logger)
@@ -1588,7 +1611,7 @@ class OverlayApp:
     def _start_metrics_thread(self) -> None:
         def worker() -> None:
             while not self._stop_event.is_set():
-                metrics = self.sensor_reader.read_metrics()
+                metrics = self.sensor_reader.read_metrics(self.config)
                 with self._metrics_lock:
                     self._latest_metrics = metrics
                 self._stop_event.wait(max(0.25, int(self.config["refresh_interval_ms"]) / 1000.0))
@@ -2119,9 +2142,10 @@ class OverlayApp:
         self._ui_timer_id = self.root.after(300, self._update_metrics_loop)
 
     def _save_config(self) -> None:
-        app_dir = self._app_dir()
+        app_dir = runtime_data_dir()
         config_path = app_dir / "config.json"
         try:
+            app_dir.mkdir(parents=True, exist_ok=True)
             tmp_path = config_path.with_suffix(".json.tmp")
             tmp_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp_path.replace(config_path)
@@ -2193,19 +2217,21 @@ class OverlayApp:
     def _set_autostart(self, enabled: bool) -> bool:
         if winreg is None:
             return False
-        if self._is_autostart_enabled() == enabled:
-            return True
-        app_name = "HardwareMonitorMini"
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE) as key:
                 if enabled:
-                    target = str(Path(sys.executable).resolve()) if getattr(sys, "frozen", False) else f'"{sys.executable}" "{Path(__file__).resolve()}"'
-                    winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, target)
-                else:
+                    target = f'"{Path(sys.executable).resolve()}"' if getattr(sys, "frozen", False) else f'"{sys.executable}" "{Path(__file__).resolve()}"'
+                    winreg.SetValueEx(key, AUTOSTART_VALUE_NAME, 0, winreg.REG_SZ, target)
                     try:
-                        winreg.DeleteValue(key, app_name)
+                        winreg.DeleteValue(key, LEGACY_AUTOSTART_VALUE_NAME)
                     except FileNotFoundError:
                         pass
+                else:
+                    for value_name in (AUTOSTART_VALUE_NAME, LEGACY_AUTOSTART_VALUE_NAME):
+                        try:
+                            winreg.DeleteValue(key, value_name)
+                        except FileNotFoundError:
+                            pass
             return True
         except Exception:
             return False
@@ -2213,11 +2239,15 @@ class OverlayApp:
     def _is_autostart_enabled(self) -> bool:
         if winreg is None:
             return False
-        app_name = "HardwareMonitorMini"
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ) as key:
-                _val, _typ = winreg.QueryValueEx(key, app_name)
-                return True
+                for value_name in (AUTOSTART_VALUE_NAME, LEGACY_AUTOSTART_VALUE_NAME):
+                    try:
+                        winreg.QueryValueEx(key, value_name)
+                        return True
+                    except FileNotFoundError:
+                        pass
+                return False
         except Exception:
             return False
 
@@ -2244,7 +2274,16 @@ def load_config() -> dict:
     _logger = logging.getLogger("hardware_monitor")
 
     app_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-    config_path = app_dir / "config.json"
+    data_dir = runtime_data_dir()
+    config_path = data_dir / "config.json"
+    legacy_config_path = app_dir / "config.json"
+    if not config_path.exists() and legacy_config_path.exists() and legacy_config_path != config_path:
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy_config_path, config_path)
+            _logger.info("Migrated config to %s", config_path)
+        except Exception as exc:
+            _logger.warning("Failed to migrate config: %s", exc)
 
     _has_refresh_in_file = False
     if config_path.exists():
