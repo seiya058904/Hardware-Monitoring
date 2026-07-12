@@ -1,93 +1,84 @@
-# AGENTS.md
+# Repository Guidelines
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+## Project Overview
 
-## Runtime Dependencies
+`Hardware Monitoring` is a Windows-only hardware overlay written in Python with `tkinter`. The main entry point is `D:\xia zai\AI project\5.11\Hardware Monitoring\app.py`, which loads hardware metrics, FPS data, the tray icon, and the settings window in one process.
 
-- **psutil** — CPU, memory, disk, network, battery metrics
-- **pythonnet** (optional) — .NET interop for LibreHardwareMonitorLib.dll sensor reading; degrades gracefully if missing
-- **LibreHardwareMonitorLib.dll** — .NET DLL loaded via pythonnet for hardware sensor data (CPU/GPU temp, fan, power, clocks)
-- **PresentMon.exe** — Microsoft's frame capture tool, used as subprocess for FPS/1% Low measurement
+The project is packaged with PyInstaller using `D:\xia zai\AI project\5.11\Hardware Monitoring\Hardware Monitoring.spec` and an NSIS installer in `D:\xia zai\AI project\5.11\Hardware Monitoring\Hardware Monitoring.nsi`. Runtime data is stored under `%LOCALAPPDATA%\Hardware Monitoring`; the repo root also contains pinned binaries and release artifacts used for packaging.
 
-No test suite exists. Verify code changes with `python -m py_compile app.py`; when runtime behavior changes, also validate on a Windows machine with `python app.py` or the built EXE.
+## Project Structure & Module Organization
 
-## UI Language
+- `D:\xia zai\AI project\5.11\Hardware Monitoring\app.py`: single-file application with metrics collection, FPS capture, tray icon, settings UI, and config loading.
+- `D:\xia zai\AI project\5.11\Hardware Monitoring\assets`: bundled app icon and UI assets.
+- `D:\xia zai\AI project\5.11\Hardware Monitoring\tools\PresentMon`: bundled PresentMon executable used for FPS data.
+- `D:\xia zai\AI project\5.11\Hardware Monitoring\_internal\libs`: pinned `LibreHardwareMonitorLib.dll` used when `pythonnet` is available.
+- `D:\xia zai\AI project\5.11\Hardware Monitoring\scripts`: helper scripts, including dependency download/verification.
+- `D:\xia zai\AI project\5.11\Hardware Monitoring\third_party`: third-party license files for the installer.
+- `D:\xia zai\AI project\5.11\Hardware Monitoring\docs`: planning notes and superpowers plans only; do not treat it as product docs.
 
-The app defaults to Chinese (`ui_language: "zh"`). English is supported via `ui_language: "en"`. All UI strings are inline-translated in `_build_ui()` and `_toggle_settings()`. When adding new UI text, always provide both zh and en variants using the `tr(zh, en)` helper. For dynamic values, use string replacement after `tr()` returns.
+Generated folders such as `build/`, `dist/`, `__pycache__/`, the built EXE, installer EXEs, and local logs are build outputs, not source.
 
-## Build & Run
+## Architecture Notes
+
+`app.py` is intentionally monolithic. Key responsibilities are split by class: `SensorReader` gathers hardware data, `FpsService` manages PresentMon, `TrayIconService` owns the Windows tray icon, and `OverlayApp` builds the UI and main loop.
+
+Data flows from background worker threads into locked shared state, then the Tkinter timer refreshes visible labels. Config loading normalizes values and keeps the UI language, theme, and metric order consistent. Packaging depends on the exact bundled `tools` and `_internal/libs` inputs remaining in place.
+
+## Build, Test & Development Commands
 
 ```bash
-# Build EXE (PyInstaller 6.13)
-pyinstaller "Hardware Monitoring.spec" --noconfirm
-
-# Built EXE at: dist/Hardware Monitoring/Hardware Monitoring.exe
-
-# Run directly (Python)
 python app.py
-
-# Run with admin elevation (prompts UAC if not already admin)
 python app.py --force-admin
-
-# Run built EXE
-./"Hardware Monitoring.exe"
-```
-
-## Build Installer (NSIS)
-
-```bash
-# Requires NSIS installed. Run from project root.
+python -m py_compile app.py
+pyinstaller "Hardware Monitoring.spec" --noconfirm
 makensis "Hardware Monitoring.nsi"
+powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1
 ```
 
-## Project Architecture
+- `python -m py_compile app.py` is the minimum static check.
+- `python app.py` or the built EXE is the runtime check when behavior changes.
+- `pyinstaller` builds the onedir distribution into `dist/Hardware Monitoring/`.
+- `makensis` builds the installer.
+- `scripts/fetch-dependencies.ps1` downloads and verifies pinned binary dependencies.
 
-Single-file tkinter application (~2286 lines) that renders a hardware monitoring overlay on Windows.
+Do not run deploy, publish, release, commit, push, or database-changing commands unless the user explicitly authorizes them.
 
-### Class Overview
+## Coding Style & Naming Conventions
 
-- **`Metrics`** (dataclass, ~line 189): All hardware metric fields (cpu_usage, gpu_temp, fps, etc.). Includes `target_process` and `source_status` for diagnostics.
-- **`SensorReader`** (~line 219): Reads hardware data via LibreHardwareMonitorLib (.NET DLL via pythonnet) and psutil. Tiered fallback: LHM direct sensors → CoreTemp shared memory (ctypes) → nvidia-smi CLI → WMI ACPI thermal zone → OpenHardwareMonitor/LibreHardwareMonitor WMI. Fallback values cached for 5 seconds.
-- **`FpsService`** (~line 791): Manages PresentMon process (subprocess) to read FPS/1% Low from a target game process. CSV-based stdout parsing. Calculates 1% Low from rolling deque of 600 frame-time samples (99th percentile).
-- **`TrayIconService`** (~line 1085): Windows system tray icon via Win32 API (Shell_NotifyIconW). Pure ctypes, no third-party dependency. Own daemon thread for Win32 message loop.
-- **`OverlayApp`** (~line 1319): Main application class. Creates the tkinter overlay window (`overrideredirect(True)`), builds the UI, manages settings, handles drag/mouse events, and runs the update loop. Entry point calls `ensure_admin()` and `SetProcessDpiAwareness(2)` before creating the root window.
+Follow the existing file’s style: Python 3, 4-space indentation, standard library first, and explicit `tr(zh, en)` pairs for UI text. Keep changes small and local. Preserve existing config keys, metric names, and Windows-specific behavior unless a change is requested.
 
-### Data Flow
+## Testing & Verification
 
-1. `SensorReader.read_metrics()` runs in a background daemon thread (configurable interval, default 500ms)
-2. `FpsService._run_worker()` runs in its own daemon thread, parsing PresentMon CSV stdout
-3. Both write to lock-protected shared state (`_latest_metrics` / `_display_text`)
-4. `_update_metrics_loop()` (tkinter `after` timer, 300ms) reads latest values and updates label widgets
-5. `_rebuild_ui_fast()` destroys and recreates the overlay when settings change (live preview)
+There is no dedicated automated test suite. Use `python -m py_compile app.py` for syntax verification, then inspect the changed files and any generated diff noise with `git status --short`, `git diff --stat`, and `git diff --check`.
 
-### Key Design Decisions
+If UI, tray, FPS, packaging, or runtime paths change, validate the behavior on Windows with `python app.py` or the packaged EXE. Browser-based visual inspection is not part of the default workflow here.
 
-- **Window**: `overrideredirect(True)` — no title bar. Acrylic blur via `SetWindowCompositionAttribute` (AccentState=4, AccentFlags=2). Draggable via custom mouse handlers.
-- **Settings**: Inline tkinter.Toplevel with ttk.Notebook, scrollable canvas, live preview (apply changes immediately to overlay while settings open).
-- **Themes**: 3 themes defined in `THEMES` dict (line 93). Theme colors: bg, panel, border, text, sub, hint, accent.
-- **FPS**: PresentMon CLI subprocess for FPS/1% Low. Restarts on target process change.
-- **Tray icon**: Pure Win32 API via ctypes — no pystray dependency. Right-click context menu with Show/Exit.
-- **Config / logs**: Runtime config and logs live under `%LOCALAPPDATA%\Hardware Monitoring`. `load_config()` handles defaults, validation (opacity clamp, min refresh 300ms, font scale [0.9,1.4]), and migration from one legacy install-local `config.json` when present.
-- **Packaging**: PyInstaller `onedir` mode. External dependencies: `tools/PresentMon/PresentMon.exe`, `_internal/libs/LibreHardwareMonitorLib.dll`.
+## Commit & Pull Request Guidelines
 
-### Metrics Display
+Recent commits are short, imperative, and scoped, for example `Add repo agent guidance`, `Fix runtime loading`, and `Harden first release packaging`. Keep future commits single-purpose and describe the actual behavior change. If a UI change needs review, include the validation result and any manual checks the user should perform.
 
-The overlay builds rows from `METRIC_LAYOUT` (~line 126) which maps metric keys to display labels and config enable-flags. `metric_order` in config controls display order. Group headers shown when multiple metrics from same group appear consecutively.
+## Security & Configuration
 
-### Settings Page Structure
+- Never commit `.env`, local config files, tokens, passwords, private keys, database strings, or other secrets.
+- Do not expose sensitive values in docs, replies, commit messages, or sample commands.
+- Do not check in local caches, logs, build output, or temporary files.
+- Treat auth, permissions, signing, billing, production config, and data-integrity changes as high risk and get explicit authorization first.
 
-`_toggle_settings()` (~line 1628) creates a modal dialog with:
-- Scrollable notebook with 5 tabs: Appearance, Metrics, Window, Game/FPS, Advanced
-- Each tab has row/segment/make_switch helpers for layout
-- Changes apply live (via `apply_live()` → calls `_rebuild_ui_fast()` to rebuild overlay)
-- Save/Cancel buttons; Cancel simply closes without extra save, but live preview already applied changes
+## Agent-Specific Instructions
 
-### Common Config Keys
+- Read the relevant files before editing and state a brief plan.
+- Prefer the smallest reviewable diff that fixes the real cause.
+- Do not change unrelated code, formatting, or behavior.
+- Do not overwrite user edits or assume stale line numbers are still valid.
+- Do not install dependencies, auto-fix, format the whole repo, commit, push, deploy, or publish without explicit permission.
+- If a check was not run, say so plainly.
 
-Boolean metric visibility keys: `show_cpu_usage`, `show_memory_usage`, `show_gpu_usage`, `show_vram_usage`, `show_cpu_temperature`, `show_gpu_temperature`, `show_cpu_fan`, `show_gpu_fan`, `show_cpu_power`, `show_gpu_power`, `show_cpu_freq`, `show_gpu_freq`, `show_vram_freq`, `show_disk_speed`, `show_network_speed`, `show_fps`, `show_fps_low_1`. `metric_order` (list) controls display sequence; `load_config()` auto-appends any missing keys.
+## Pre-Commit Checklist
 
-### NSIS Installer
-
-- 4 user-selectable components: core files, start menu shortcut, desktop shortcut, autostart
-- Admin-level install to `$PROGRAMFILES`
-- Uninstaller removes installed program files, shortcuts, and registry entries, but keeps `%LOCALAPPDATA%\Hardware Monitoring` user data by default
+- `git status --short`
+- `git diff --stat`
+- `git diff -- AGENTS.md`
+- Only the intended files changed
+- No secrets or local runtime files
+- Required checks run, or their absence stated clearly
+- Commit or push only after explicit authorization
