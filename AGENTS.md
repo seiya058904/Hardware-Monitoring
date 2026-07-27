@@ -20,7 +20,7 @@ Generated folders such as `build/`, `dist/`, `__pycache__/`, the built EXE, inst
 
 ## Architecture Notes
 
-`app.py` is intentionally monolithic. Key responsibilities are split by class: `SensorReader` gathers hardware data, `FpsService` manages PresentMon, `TrayIconService` owns the Windows tray icon, and `OverlayApp` builds the UI and main loop.
+`app.py` is intentionally monolithic. Key responsibilities are split by class: `SensorReader` gathers hardware data, `FpsService` owns one PresentMon worker generation at a time, `TrayIconService` owns the Windows tray icon, and `OverlayApp` builds the UI and main loop.
 
 Data flows from background worker threads into locked shared state, then the Tkinter timer refreshes visible labels. Config loading normalizes values and keeps the UI language, theme, and metric order consistent. Packaging depends on the exact bundled `tools` and `_internal/libs` inputs remaining in place.
 
@@ -49,7 +49,7 @@ Follow the existing file’s style: Python 3, 4-space indentation, standard libr
 
 ## Testing & Verification
 
-There is no dedicated automated test suite. Use `python -m py_compile app.py` for syntax verification, then inspect the changed files and any generated diff noise with `git status --short`, `git diff --stat`, and `git diff --check`.
+The regression tests use the standard-library `unittest` runner and live in `tests/test_fps_service.py` and `tests/test_sensor_reader.py`. Run `python -m unittest discover -s tests -v` for relevant behavior, plus `python -m py_compile app.py` for syntax verification. Then inspect the changed files and any generated diff noise with `git status --short`, `git diff --stat`, and `git diff --check`.
 
 If UI, tray, FPS, packaging, or runtime paths change, validate the behavior on Windows with `python app.py` or the packaged EXE. Browser-based visual inspection is not part of the default workflow here.
 
