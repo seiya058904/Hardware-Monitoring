@@ -3,6 +3,7 @@ import ctypes.wintypes
 import csv
 import json
 import logging
+import math
 import os
 import shutil
 import tempfile
@@ -380,7 +381,9 @@ class SensorReader:
         return entries
 
     @staticmethod
-    def _pick_max(current: Optional[float], candidate: float) -> float:
+    def _pick_max(current: Optional[float], candidate: float) -> Optional[float]:
+        if not math.isfinite(candidate):
+            return current
         if current is None:
             return candidate
         return max(current, candidate)
@@ -477,6 +480,8 @@ class SensorReader:
 
                     s_name = str(sensor.Name).lower()
                     sensor_value = float(sensor.Value)
+                    if not math.isfinite(sensor_value):
+                        continue
 
                     if sensor.SensorType == sensor_type.Load and "Cpu" in hw_type_name:
                         if "total" in s_name:
@@ -891,6 +896,7 @@ class FpsService:
         self._active_presentmon_path: Optional[Path] = None
         self._presentmon_available = False
         self._frame_ms_samples = deque(maxlen=600)
+        self._generation = 0
 
     def configure(self, enabled: bool, target_process: str, force_restart: bool = False) -> None:
         target_process = (target_process or "").strip()
@@ -993,8 +999,10 @@ class FpsService:
 
     def restart(self) -> None:
         self.stop()
-        self._stop_event.clear()
         with self._lock:
+            self._stop_event.clear()
+            self._generation += 1
+            generation = self._generation
             self._csv_headers = []
             self._csv_index = {}
             self._last_value_ts = 0.0
@@ -1002,13 +1010,15 @@ class FpsService:
             self._low_display_text = "--"
             self._frame_ms_samples.clear()
 
-        self._worker_thread = threading.Thread(target=self._run_worker, daemon=True)
+        self._worker_thread = threading.Thread(target=self._run_worker, args=(generation,), daemon=True)
         self._worker_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        proc = self._proc
-        self._proc = None
+        with self._lock:
+            self._generation += 1
+            proc = self._proc
+            self._proc = None
         if proc is not None:
             try:
                 if proc.poll() is None:
@@ -1037,9 +1047,22 @@ class FpsService:
                     return "--"
             return self._low_display_text
 
-    def _run_worker(self) -> None:
+    def _run_worker(self, generation: int) -> None:
+        with self._lock:
+            if generation != self._generation or self._stop_event.is_set():
+                return
         proc = self._spawn()
-        self._proc = proc
+        with self._lock:
+            stale = generation != self._generation or self._stop_event.is_set()
+            if not stale:
+                self._proc = proc
+        if stale:
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            return
         if proc is None or proc.stdout is None:
             with self._lock:
                 if self._enabled and self._target_process:
@@ -1049,7 +1072,7 @@ class FpsService:
         try:
             if proc.stderr is not None:
                 threading.Thread(target=self._read_stderr, args=(proc.stderr,), daemon=True).start()
-            while not self._stop_event.is_set():
+            while not self._stop_event.is_set() and generation == self._generation:
                 line = proc.stdout.readline()
                 if not line:
                     break
@@ -1063,7 +1086,7 @@ class FpsService:
             except Exception:
                 pass
             with self._lock:
-                if self._enabled and self._target_process and self._display_text not in ("不可用", "未选择", "关闭"):
+                if generation == self._generation and self._enabled and self._target_process and self._display_text not in ("不可用", "未选择", "关闭"):
                     self._display_text = "--"
                     self._low_display_text = "--"
             try:
