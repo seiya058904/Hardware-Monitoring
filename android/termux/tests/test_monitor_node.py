@@ -1,8 +1,14 @@
+from dataclasses import asdict
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import StringIO
+import json
 from pathlib import Path
 import signal
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -51,6 +57,70 @@ class FakeStopEvent:
 
 
 class MonitorNodeTests(unittest.TestCase):
+    def test_direct_script_once_executes_without_a_relative_import_error(self):
+        class DashboardHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = (
+                    b'{"status":"ok"}'
+                    if self.path == "/healthz"
+                    else json.dumps(
+                        {
+                            "status": "ok",
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                            "metrics": {},
+                        }
+                    ).encode("utf-8")
+                )
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), DashboardHandler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        script = Path(__file__).parents[1] / "monitor_node.py"
+
+        try:
+            with TemporaryDirectory() as directory:
+                config_path = Path(directory) / "config.json"
+                config = NodeConfig(
+                    dashboard_base_url=f"http://127.0.0.1:{server.server_port}",
+                    check_gateway=False,
+                    check_internet=False,
+                    internet_probe_urls=(),
+                )
+                config_path.write_text(json.dumps(asdict(config)), encoding="utf-8")
+                completed = subprocess.run(
+                    [sys.executable, str(script), "--once", "--config", str(config_path)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertRegex(completed.stdout, r"^dashboard healthy ok \d+ms\n$")
+
+    def test_default_runtime_files_use_the_private_node_home(self):
+        home = Path.home() / ".local" / "share" / "hardware-monitor-node"
+
+        self.assertEqual(monitor_node.NODE_HOME, home)
+        self.assertEqual(monitor_node.DEFAULT_CONFIG_PATH, home / "config.json")
+        self.assertEqual(
+            monitor_node._node_paths(),
+            (home / "state.json", home / "logs" / "monitor.log", home / "monitor.lock"),
+        )
+
     def test_run_once_skips_disabled_gateway_and_internet(self):
         config = NodeConfig(check_gateway=False, check_internet=False, internet_probe_urls=())
 

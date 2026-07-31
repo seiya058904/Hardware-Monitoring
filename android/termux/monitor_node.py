@@ -8,6 +8,13 @@ import subprocess
 import sys
 import threading
 from typing import Sequence
+import types
+
+if not __package__:
+    package = types.ModuleType("_hardware_monitor_node")
+    package.__path__ = [str(Path(__file__).resolve().parent)]
+    sys.modules.setdefault(package.__name__, package)
+    __package__ = package.__name__
 
 from .node_checks import CheckResult, CompletedCommand, check_dashboard, check_gateway, check_internet
 from .node_config import NodeConfig, load_config
@@ -22,7 +29,8 @@ from .node_runtime import (
 from .node_state import advance_state, default_target_state
 
 
-DEFAULT_CONFIG_PATH = Path.home() / ".hardware-monitor-node" / "config.json"
+NODE_HOME = Path.home() / ".local" / "share" / "hardware-monitor-node"
+DEFAULT_CONFIG_PATH = NODE_HOME / "config.json"
 
 
 def _run_command(command: list[str]) -> CompletedCommand:
@@ -55,9 +63,8 @@ def _outcome(result: CheckResult) -> str:
     return "healthy" if result.success is True else "failed" if result.success is False else "unknown"
 
 
-def _node_paths(config_path: Path) -> tuple[Path, Path, Path]:
-    directory = config_path.parent
-    return directory / "state.json", directory / "monitor.log", directory / "monitor.lock"
+def _node_paths() -> tuple[Path, Path, Path]:
+    return NODE_HOME / "state.json", NODE_HOME / "logs" / "monitor.log", NODE_HOME / "monitor.lock"
 
 
 def run_forever(config_path: Path) -> int:
@@ -68,7 +75,7 @@ def run_forever(config_path: Path) -> int:
         print("configuration error", file=sys.stderr)
         return 2
 
-    state_path, log_path, lock_path = _node_paths(config_path)
+    state_path, log_path, lock_path = _node_paths()
     logger = configure_logging(log_path, config.log_max_bytes, config.log_backup_count)
     lock = InstanceLock(lock_path, Path(__file__))
     if not lock.acquire():
