@@ -22,6 +22,10 @@ https://github.com/seiya058904/Hardware-Monitoring/releases/tag/Hardware-Monitor
 运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
 卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
 
+## 局域网仪表盘 / LAN dashboard
+
+在“高级设置”中主动启用“局域网仪表盘”后，手机可在同一 Wi-Fi 下访问设置中显示的地址（默认端口 `8765`）。页面每秒刷新一次，仅提供 `GET /`、`GET /api/metrics` 和 `GET /healthz`；不含远程控制、文件访问或公网/防火墙自动配置。关闭该开关或退出程序会停止服务并释放端口。Windows 防火墙提示时仅允许专用网络。
+
 <img width="475" height="902" alt="image" src="https://github.com/user-attachments/assets/8b3a7b37-8b3b-4df3-8617-d46968ff386f" />
 
 <img width="764" height="694" alt="image" src="https://github.com/user-attachments/assets/bc32c3e2-4bfd-4ec3-b402-3ca316fc8b86" />
