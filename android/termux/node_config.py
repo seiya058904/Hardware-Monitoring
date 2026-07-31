@@ -87,10 +87,13 @@ class NodeConfig:
             raise ValueError("internet_probe_urls must contain exactly two URLs")
         if not self.check_internet and urls:
             raise ValueError("internet_probe_urls must be empty when check_internet is false")
+        normalized_urls = tuple(_validate_url(url, {"https"}, "internet_probe_urls") for url in urls)
+        if self.check_internet and normalized_urls != DEFAULT_PROBE_URLS:
+            raise ValueError("internet_probe_urls must use the approved probe URLs")
         object.__setattr__(
             self,
             "internet_probe_urls",
-            tuple(_validate_url(url, {"https"}, "internet_probe_urls") for url in urls),
+            normalized_urls,
         )
 
 

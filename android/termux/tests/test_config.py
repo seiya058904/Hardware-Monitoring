@@ -112,6 +112,15 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.load_values(values)
 
+    def test_rejects_unapproved_or_reordered_probe_urls(self):
+        for urls in (
+            ["https://private.example/probe", "https://www.cloudflare.com/cdn-cgi/trace"],
+            ["https://www.cloudflare.com/cdn-cgi/trace", "https://connectivitycheck.gstatic.com/generate_204"],
+        ):
+            with self.subTest(urls=urls):
+                with self.assertRaises(ValueError):
+                    self.load_values(DEFAULT_VALUES | {"internet_probe_urls": urls})
+
     def test_allows_empty_probe_urls_only_when_internet_check_is_disabled(self):
         config = self.load_values(
             DEFAULT_VALUES | {"check_internet": False, "internet_probe_urls": []}
