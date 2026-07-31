@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta, timezone
+import errno
 from pathlib import Path
 import json
 import socket
+import ssl
 import unittest
 from urllib.error import HTTPError, URLError
 
-from android.termux.node_checks import check_dashboard
+from android.termux.node_checks import CompletedCommand, check_dashboard, check_gateway, check_internet
 from android.termux.node_config import NodeConfig
 
 
@@ -168,6 +170,219 @@ class DashboardChecksTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(size > 0 for size in health.read_sizes + metrics.read_sizes))
+
+
+class GatewayChecksTests(unittest.TestCase):
+    def setUp(self):
+        self.config = NodeConfig(request_timeout_seconds=5)
+
+    def check(self, commands, socket_factory=None):
+        calls = []
+
+        def runner(command):
+            calls.append(command)
+            response = commands.pop(0)
+            if isinstance(response, BaseException):
+                raise response
+            return response
+
+        result = check_gateway(
+            self.config,
+            runner,
+            _socket_factory=socket_factory or (lambda *_: (_ for _ in ()).throw(AssertionError("TCP not expected"))),
+            _now=lambda: NOW,
+            _monotonic=lambda: 1.0,
+        )
+        return result, calls
+
+    def test_route_parsing_uses_the_default_gateway_neighbor(self):
+        result, calls = self.check(
+            [
+                CompletedCommand(0, "10.0.0.0/8 dev wlan0\ndefault via 192.168.50.1 dev wlan0\n"),
+                CompletedCommand(0, "192.168.50.1 dev wlan0 lladdr 00:11:22:33:44:55 REACHABLE\n"),
+            ]
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.category, "gateway_neighbor")
+        self.assertEqual(calls, [["ip", "route"], ["ip", "neigh", "show", "192.168.50.1"]])
+
+    def test_absent_default_gateway_is_unknown(self):
+        result, calls = self.check([CompletedCommand(0, "192.168.50.0/24 dev wlan0\n")])
+
+        self.assertIsNone(result.success)
+        self.assertEqual(result.category, "gateway_unknown")
+        self.assertEqual(calls, [["ip", "route"]])
+
+    def test_accepted_neighbor_states_confirm_the_gateway(self):
+        for state in ("REACHABLE", "STALE", "DELAY", "PROBE", "PERMANENT"):
+            with self.subTest(state=state):
+                result, _ = self.check(
+                    [
+                        CompletedCommand(0, "default via 192.168.50.1 dev wlan0\n"),
+                        CompletedCommand(0, f"192.168.50.1 dev wlan0 {state}\n"),
+                    ]
+                )
+                self.assertTrue(result.success)
+                self.assertEqual(result.category, "gateway_neighbor")
+
+    def test_absent_neighbor_makes_one_dns_tcp_attempt(self):
+        attempts = []
+
+        class ConnectedSocket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *unused):
+                return False
+
+        def socket_factory(address, timeout):
+            attempts.append((address, timeout))
+            return ConnectedSocket()
+
+        result, _ = self.check(
+            [CompletedCommand(0, "default via 192.168.50.1 dev wlan0\n"), CompletedCommand(0, "")],
+            socket_factory,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.category, "gateway_tcp")
+        self.assertEqual(attempts, [(("192.168.50.1", 53), 5)])
+
+    def test_unaccepted_neighbor_result_still_makes_one_dns_tcp_attempt(self):
+        class ConnectedSocket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *unused):
+                return False
+
+        result, _ = self.check(
+            [
+                CompletedCommand(0, "default via 192.168.50.1 dev wlan0\n"),
+                CompletedCommand(2, stderr="neighbor entry unavailable"),
+            ],
+            lambda *_: ConnectedSocket(),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.category, "gateway_tcp")
+
+    def test_tcp_connection_refused_confirms_the_gateway_replied(self):
+        def socket_factory(*unused):
+            raise ConnectionRefusedError()
+
+        result, _ = self.check(
+            [CompletedCommand(0, "default via 192.168.50.1 dev wlan0\n"), CompletedCommand(0, "")],
+            socket_factory,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.category, "gateway_tcp")
+
+    def test_tcp_host_or_network_unreachable_is_a_gateway_failure(self):
+        for error_number in (errno.EHOSTUNREACH, errno.ENETUNREACH):
+            with self.subTest(error_number=error_number):
+                def socket_factory(*unused):
+                    raise OSError(error_number, "unreachable")
+
+                result, _ = self.check(
+                    [CompletedCommand(0, "default via 192.168.50.1 dev wlan0\n"), CompletedCommand(0, "")],
+                    socket_factory,
+                )
+                self.assertFalse(result.success)
+                self.assertEqual(result.category, "gateway_unreachable")
+
+    def test_tcp_timeout_is_unverified(self):
+        def socket_factory(*unused):
+            raise socket.timeout()
+
+        result, _ = self.check(
+            [CompletedCommand(0, "default via 192.168.50.1 dev wlan0\n"), CompletedCommand(0, "")],
+            socket_factory,
+        )
+
+        self.assertIsNone(result.success)
+        self.assertEqual(result.category, "gateway_unverified")
+
+    def test_missing_ip_tool_is_probe_unavailable(self):
+        result, calls = self.check([FileNotFoundError()])
+
+        self.assertIsNone(result.success)
+        self.assertEqual(result.category, "gateway_probe_unavailable")
+        self.assertEqual(calls, [["ip", "route"]])
+
+    def test_ip_permission_failure_is_probe_unavailable(self):
+        result, _ = self.check([CompletedCommand(1, stderr="Operation not permitted")])
+
+        self.assertIsNone(result.success)
+        self.assertEqual(result.category, "gateway_probe_unavailable")
+
+
+class InternetChecksTests(unittest.TestCase):
+    def setUp(self):
+        self.config = NodeConfig(request_timeout_seconds=5)
+
+    def check(self, responses):
+        calls = []
+
+        def opener(request, timeout, context):
+            calls.append((request.full_url, timeout, context))
+            response = responses.pop(0)
+            if isinstance(response, BaseException):
+                raise response
+            return response
+
+        result = check_internet(
+            self.config,
+            _opener=opener,
+            _now=lambda: NOW,
+            _monotonic=lambda: 1.0,
+        )
+        return result, calls
+
+    def test_google_204_confirms_internet_with_tls_verification(self):
+        result, calls = self.check([FakeResponse(204, b"")])
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.category, "ok")
+        self.assertEqual(calls[0][:2], ("https://connectivitycheck.gstatic.com/generate_204", 5))
+        self.assertTrue(calls[0][2].check_hostname)
+        self.assertEqual(calls[0][2].verify_mode, ssl.CERT_REQUIRED)
+
+    def test_cloudflare_trace_confirms_internet_with_a_bounded_read(self):
+        trace = FakeResponse(200, b"fl=1\nvisit_scheme=https\n")
+
+        result, calls = self.check([FakeResponse(503, b""), trace])
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.category, "ok")
+        self.assertEqual([call[0] for call in calls], [
+            "https://connectivitycheck.gstatic.com/generate_204",
+            "https://www.cloudflare.com/cdn-cgi/trace",
+        ])
+        self.assertEqual(trace.read_sizes, [2048])
+
+    def test_both_invalid_targets_report_their_separate_categories(self):
+        result, _ = self.check([FakeResponse(200, b""), FakeResponse(200, b"visit_scheme=http\n")])
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.category, "internet_failed")
+        self.assertEqual(result.detail, "http_error,trace_invalid")
+
+    def test_redirect_tls_dns_and_timeout_failures_are_classified(self):
+        cases = (
+            (HTTPError("https://example.invalid", 302, "redirect", {}, None), "redirect"),
+            (URLError(ssl.SSLCertVerificationError()), "tls_error"),
+            (URLError(socket.gaierror()), "dns_error"),
+            (URLError(socket.timeout()), "timeout"),
+        )
+        for error, category in cases:
+            with self.subTest(category=category):
+                result, _ = self.check([error, FakeResponse(200, b"visit_scheme=http\n")])
+                self.assertFalse(result.success)
+                self.assertEqual(result.category, "internet_failed")
+                self.assertEqual(result.detail, f"{category},trace_invalid")
 
 
 if __name__ == "__main__":
