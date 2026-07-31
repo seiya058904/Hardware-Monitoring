@@ -8,6 +8,7 @@ from os import fsync as os_fsync
 from os import open as os_open
 from os import replace as os_replace
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 import threading
@@ -511,6 +512,43 @@ class NotificationClientTests(unittest.TestCase):
         client = self.make_client(lambda command: 1)
 
         self.assertFalse(client.send(EVENT))
+
+    def test_default_notification_runner_uses_a_finite_timeout(self):
+        logger = logging.getLogger("runtime-notification-timeout-argument")
+        logger.handlers.clear()
+        logger.addHandler(logging.NullHandler())
+        with patch(
+            "android.termux.node_runtime.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0),
+        ) as run:
+            self.assertTrue(NotificationClient(logger).send(EVENT))
+
+        self.assertGreater(run.call_args.kwargs["timeout"], 0)
+
+    def test_notification_timeout_returns_false_and_is_rate_limited(self):
+        logger = logging.getLogger("runtime-notification-timeout")
+        logger.handlers.clear()
+        logger.setLevel(logging.ERROR)
+        logger.propagate = False
+        records = []
+
+        class CollectingHandler(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        logger.addHandler(CollectingHandler())
+        moments = iter((0.0, 1.0))
+        client = NotificationClient(
+            logger,
+            runner=lambda command: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(command, 10)
+            ),
+            monotonic=lambda: next(moments),
+        )
+
+        self.assertFalse(client.send(EVENT))
+        self.assertFalse(client.send(EVENT))
+        self.assertEqual(records, ["notification_unavailable: command_timeout"])
 
     def test_notification_rejects_an_arbitrary_event_id(self):
         commands = []

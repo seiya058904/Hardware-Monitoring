@@ -101,7 +101,7 @@ write_wrapper() {
     {
         printf '%s\n' '#!/data/data/com.termux/files/usr/bin/sh'
         printf 'PREFIX=%s\n' "$PREFIX"
-        printf '%s\n' 'unset NODE_HOME NODE_CONFIG NODE_SCRIPT PYTHON_BIN'
+        printf '%s\n' 'unset NODE_HOME NODE_CONFIG NODE_SCRIPT PYTHON_BIN FLOCK_BIN'
         printf '%s\n' 'exec "$PREFIX/bin/setsid" "$HOME/.local/share/hardware-monitor-node/boot.sh"'
     } > "$temporary_path"
     chmod 700 "$temporary_path"
@@ -126,6 +126,7 @@ PYTHON_BIN="$(trusted_command python)"
 trusted_command termux-wake-lock >/dev/null
 trusted_command termux-wake-unlock >/dev/null
 trusted_command setsid >/dev/null
+trusted_command flock >/dev/null
 
 for filename in monitor_node.py node_config.py node_checks.py node_state.py node_runtime.py boot.sh config.example.json; do
     [ -f "$SCRIPT_DIR/$filename" ] || {

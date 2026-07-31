@@ -9,7 +9,7 @@ import ssl
 import time
 from typing import Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from .node_config import NodeConfig
 
@@ -39,6 +39,15 @@ class CompletedCommand:
 CommandRunner = Callable[[list[str]], CompletedCommand]
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_dashboard(request: Request, timeout: int):
+    return build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
+
+
 def _load_json(response) -> object:
     body = response.read(_MAX_RESPONSE_BYTES + 1)
     if len(body) > _MAX_RESPONSE_BYTES:
@@ -66,7 +75,7 @@ def check_dashboard(
     config: NodeConfig,
     now: datetime,
     *,
-    _opener=urlopen,
+    _opener=_open_dashboard,
     _monotonic=time.monotonic,
 ) -> CheckResult:
     """Check dashboard availability and the freshness of its metrics."""
@@ -227,11 +236,6 @@ def check_gateway(
             return _gateway_result(False, "gateway_unreachable", started, now, _monotonic)
         return _gateway_result(None, "gateway_unverified", started, now, _monotonic)
     return _gateway_result(True, "gateway_tcp", started, now, _monotonic)
-
-
-class _NoRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, msg, headers, newurl):
-        return None
 
 
 def _open_internet(request: Request, timeout: int, context: ssl.SSLContext):

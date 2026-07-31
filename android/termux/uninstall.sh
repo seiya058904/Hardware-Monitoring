@@ -5,6 +5,7 @@ PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 NODE_HOME="$HOME/.local/share/hardware-monitor-node"
 NODE_SCRIPT="$NODE_HOME/monitor_node.py"
 NODE_LOCK="$NODE_HOME/monitor.lock"
+SUPERVISOR_LOCK="$NODE_HOME/supervisor.lock"
 BOOT_WRAPPER="$HOME/.termux/boot/start-hardware-monitor-node"
 PURGE_DATA=false
 
@@ -33,24 +34,25 @@ trusted_command_if_available() {
 }
 
 stop_verified_node() {
-    [ -f "$NODE_SCRIPT" ] && [ -f "$NODE_LOCK" ] || return 0
+    [ -f "$NODE_SCRIPT" ] || return 0
+    [ -f "$NODE_LOCK" ] || [ -f "$SUPERVISOR_LOCK" ] || return 0
     python_path="$(trusted_command_if_available python)"
     [ -n "$python_path" ] || return 0
-    group_and_pid="$(PYTHONDONTWRITEBYTECODE=1 "$python_path" - "$NODE_HOME" "$NODE_LOCK" "$NODE_SCRIPT" <<'PY'
+    group_and_pid="$(PYTHONDONTWRITEBYTECODE=1 "$python_path" - "$NODE_HOME" "$NODE_LOCK" "$SUPERVISOR_LOCK" "$NODE_SCRIPT" <<'PY'
 import json
 import os
 from pathlib import Path
-import signal
 import sys
 
 node_home = Path(sys.argv[1]).resolve()
 lock_path = Path(sys.argv[2])
-script_path = Path(sys.argv[3]).resolve()
+supervisor_lock_path = Path(sys.argv[3])
+script_path = Path(sys.argv[4]).resolve()
 if not node_home.is_dir() or not script_path.is_file():
     raise SystemExit(0)
 
-try:
-    record = json.loads(lock_path.read_text(encoding="utf-8"))
+def load_record(path, expected_script):
+    record = json.loads(path.read_text(encoding="utf-8"))
     if (
         not isinstance(record, dict)
         or set(record) != {"pid", "started_at", "process_start_ticks", "script_path"}
@@ -60,17 +62,47 @@ try:
         or record["process_start_ticks"] < 0
         or not isinstance(record["started_at"], str)
         or not record["started_at"]
-        or record["script_path"] != str(script_path)
+        or record["script_path"] != str(expected_script)
     ):
-        raise SystemExit(0)
+        return None
+    return record
+
+def process_details(record):
     os.kill(record["pid"], 0)
     cmdline = Path(f"/proc/{record['pid']}/cmdline").read_bytes().split(b"\0")
     command = [os.fsdecode(argument) for argument in cmdline if argument]
     stat = Path(f"/proc/{record['pid']}/stat").read_text(encoding="utf-8")
     fields_after_command = stat[stat.rfind(")") + 1 :].split()
-    if str(script_path) not in command or int(fields_after_command[19]) != record["process_start_ticks"]:
+    if int(fields_after_command[19]) != record["process_start_ticks"]:
+        return None
+    return command, int(fields_after_command[2])
+
+try:
+    supervisor_script = (node_home / "boot.sh").resolve()
+    supervisor_record = load_record(supervisor_lock_path, supervisor_script)
+    if supervisor_record is not None:
+        supervisor_details = process_details(supervisor_record)
+        if supervisor_details is not None:
+            supervisor_command, supervisor_group = supervisor_details
+            if (
+                str(supervisor_script) in supervisor_command
+                and supervisor_group == supervisor_record["pid"]
+            ):
+                print(f"{supervisor_group}:{supervisor_record['pid']}")
+                raise SystemExit(0)
+except (IndexError, OSError, TypeError, ValueError, json.JSONDecodeError):
+    pass
+
+try:
+    record = load_record(lock_path, script_path)
+    if record is None:
         raise SystemExit(0)
-    group_id = int(fields_after_command[2])
+    details = process_details(record)
+    if details is None:
+        raise SystemExit(0)
+    command, group_id = details
+    if str(script_path) not in command:
+        raise SystemExit(0)
     group_stat = Path(f"/proc/{group_id}/stat").read_text(encoding="utf-8")
     group_command = [
         os.fsdecode(argument)
@@ -123,6 +155,7 @@ if [ "$PURGE_DATA" = true ]; then
     rm -f "$NODE_HOME/state.json"
     rm -f "$NODE_HOME/monitor.lock"
     rm -f "$NODE_HOME/.monitor.lock.guard"
+    rm -f "$NODE_HOME/supervisor.lock"
     rm -f "$NODE_HOME/logs/monitor.log"
     rm -f "$NODE_HOME/logs/monitor.log.1"
     rm -f "$NODE_HOME/logs/monitor.log.2"

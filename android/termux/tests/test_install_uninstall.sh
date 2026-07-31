@@ -24,6 +24,7 @@ cleanup_node() {
     rm -f "$HOME_DIR/.local/share/hardware-monitor-node/config.json"
     rm -f "$HOME_DIR/.local/share/hardware-monitor-node/state.json"
     rm -f "$HOME_DIR/.local/share/hardware-monitor-node/monitor.lock"
+    rm -f "$HOME_DIR/.local/share/hardware-monitor-node/supervisor.lock"
     rm -f "$HOME_DIR/.local/share/hardware-monitor-node/logs/monitor.log"
     rm -f "$HOME_DIR/.local/share/hardware-monitor-node/keep.txt"
     rmdir "$HOME_DIR/.local/share/hardware-monitor-node/logs" 2>/dev/null || :
@@ -51,6 +52,7 @@ cleanup() {
     rm -f "$BIN_DIR/termux-wake-lock"
     rm -f "$BIN_DIR/termux-wake-unlock"
     rm -f "$BIN_DIR/setsid"
+    rm -f "$BIN_DIR/flock"
     rmdir "$BIN_DIR" 2>/dev/null || :
     rm -f "$CONFIG_SOURCE"
     rm -f "$DIAGNOSTICS"
@@ -101,7 +103,7 @@ fi
 exec "$REAL_PYTHON" "\$@"
 PY
     chmod +x "$BIN_DIR/python"
-    for command in termux-wake-lock termux-wake-unlock setsid; do
+    for command in termux-wake-lock termux-wake-unlock setsid flock; do
         cat > "$BIN_DIR/$command" <<'SH'
 #!/usr/bin/env bash
 if [ "$(basename "$0")" = setsid ] && [ -n "${WRAPPER_CAPTURE:-}" ]; then
@@ -184,18 +186,18 @@ fi
 
 mkdir -p "$NODE_HOME/logs"
 : > "$NODE_HOME/state.json"
-: > "$NODE_HOME/monitor.lock"
+: > "$NODE_HOME/supervisor.lock"
 : > "$NODE_HOME/logs/monitor.log"
 cat > "$NODE_HOME/boot.sh" <<'SH'
 #!/usr/bin/env bash
-trap 'exit 0' TERM
+trap 'rm -f "$SUPERVISOR_LOCK"; exit 0' TERM
 while :; do
     printf '%s\n' restart >> "$RESTART_LOG"
     sleep 0.1
 done
 SH
 chmod +x "$NODE_HOME/boot.sh"
-RESTART_LOG="$TEMP_DIR/restarts.log" bash "$NODE_HOME/boot.sh" &
+RESTART_LOG="$TEMP_DIR/restarts.log" SUPERVISOR_LOCK="$NODE_HOME/supervisor.lock" bash "$NODE_HOME/boot.sh" &
 SUPERVISOR_PID=$!
 for attempt in 1 2 3 4 5; do
     [ -s "$TEMP_DIR/restarts.log" ] && break
@@ -209,6 +211,7 @@ kill() {
     fi
     command kill "$@"
 }
+export SUPERVISOR_PID
 export -f kill
 RESTART_LOG="$TEMP_DIR/restarts.log" VERIFY_GROUP="$SUPERVISOR_PID" run_uninstall
 restart_count="$(wc -l < "$TEMP_DIR/restarts.log")"
@@ -223,6 +226,7 @@ fi
 [ -f "$NODE_HOME/logs/monitor.log" ] || fail "default uninstall must preserve logs"
 [ ! -e "$WRAPPER" ] || fail "uninstall must remove only its Boot wrapper"
 [ ! -e "$NODE_HOME/monitor_node.py" ] || fail "uninstall must remove deployed program files"
+[ ! -e "$NODE_HOME/supervisor.lock" ] || fail "uninstall must remove the stopped supervisor record"
 grep -Fxq "termux-wake-unlock" "$TERMUX_LOG" || fail "uninstall must release the wake lock"
 
 run_install

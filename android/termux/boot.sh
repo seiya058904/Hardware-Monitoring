@@ -5,6 +5,8 @@ NODE_HOME="${NODE_HOME:-$HOME/.local/share/hardware-monitor-node}"
 NODE_CONFIG="${NODE_CONFIG:-$NODE_HOME/config.json}"
 NODE_SCRIPT="${NODE_SCRIPT:-$NODE_HOME/monitor_node.py}"
 PYTHON_BIN="${PYTHON_BIN:-/data/data/com.termux/files/usr/bin/python}"
+FLOCK_BIN="${FLOCK_BIN:-/data/data/com.termux/files/usr/bin/flock}"
+SUPERVISOR_LOCK="$NODE_HOME/supervisor.lock"
 INSTANCE_LOCK_CONTENDED_EXIT=3
 
 config_values="$("$PYTHON_BIN" - "$NODE_CONFIG" "$NODE_SCRIPT" <<'PY'
@@ -27,7 +29,45 @@ startup_delay_seconds="${config_values%%:*}"
 stable_window_seconds="${config_values#*:}"
 [ -n "$startup_delay_seconds" ] && [ -n "$stable_window_seconds" ] || exit 2
 
+exec 9>> "$SUPERVISOR_LOCK"
+"$FLOCK_BIN" -n 9 || exit 0
+supervisor_record="$("$PYTHON_BIN" - "$$" "$0" <<'PY'
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import sys
+
+pid = int(sys.argv[1])
+stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+fields_after_command = stat[stat.rfind(")") + 1 :].split()
+if int(fields_after_command[2]) != pid:
+    raise SystemExit(2)
+print(json.dumps({
+    "pid": pid,
+    "started_at": datetime.now(timezone.utc).isoformat(),
+    "process_start_ticks": int(fields_after_command[19]),
+    "script_path": str(Path(sys.argv[2]).resolve()),
+}, sort_keys=True))
+PY
+)"
+: > "$SUPERVISOR_LOCK"
+printf '%s\n' "$supervisor_record" > "$SUPERVISOR_LOCK"
+
+wake_locked=false
+cleanup() {
+    status=$?
+    trap - EXIT
+    if [ "$wake_locked" = true ]; then
+        termux-wake-unlock || :
+    fi
+    rm -f "$SUPERVISOR_LOCK"
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 0' HUP INT TERM
+
 sleep "$startup_delay_seconds"
+wake_locked=true
 termux-wake-lock
 
 while :; do

@@ -28,6 +28,7 @@ _NOTIFICATION_ERROR_INTERVAL_SECONDS = 3600
 _NOTIFICATION_TARGETS = frozenset(("dashboard", "gateway", "internet"))
 _NOTIFICATION_TITLE_LIMIT = 128
 _NOTIFICATION_CONTENT_LIMIT = 512
+_NOTIFICATION_TIMEOUT_SECONDS = 10
 _LOG_DETAIL_LIMIT = 160
 _LOG_SUMMARY_INTERVAL_SECONDS = 3600
 _LOCK_FIELDS = frozenset(("pid", "started_at", "process_start_ticks", "script_path"))
@@ -477,7 +478,11 @@ def log_check_result(
 
 def _run_notification(command: list[str]) -> int:
     return subprocess.run(
-        command, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        command,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=_NOTIFICATION_TIMEOUT_SECONDS,
     ).returncode
 
 
@@ -500,6 +505,9 @@ class NotificationClient:
         try:
             result = self._runner(command)
             returncode = result if isinstance(result, int) else result.returncode
+        except subprocess.TimeoutExpired:
+            self._error("command_timeout")
+            return False
         except (OSError, AttributeError):
             self._error("command_unavailable")
             return False

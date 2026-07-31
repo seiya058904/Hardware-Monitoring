@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
 import errno
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import json
 import socket
 import ssl
+import threading
 import unittest
 from urllib.error import HTTPError, URLError
 
@@ -170,6 +172,79 @@ class DashboardChecksTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(size > 0 for size in health.read_sizes + metrics.read_sizes))
+
+    def test_dashboard_does_not_follow_health_or_metrics_redirects(self):
+        outside_hits = []
+
+        class OutsideHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                outside_hits.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(
+                    self.server.responses.get(self.path, b"{}")
+                )
+
+            def log_message(self, format, *args):
+                pass
+
+        class DashboardHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == self.server.redirect_path:
+                    self.send_response(302)
+                    self.send_header(
+                        "Location",
+                        f"http://127.0.0.1:{outside.server_port}{self.path}",
+                    )
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(self.server.responses[self.path])
+
+            def log_message(self, format, *args):
+                pass
+
+        responses = {
+            "/healthz": self.fixture("health-ok.json"),
+            "/api/metrics": json.dumps(
+                {"status": "ok", "updated_at": NOW.isoformat(), "metrics": {}}
+            ).encode(),
+        }
+        outside = HTTPServer(("127.0.0.1", 0), OutsideHandler)
+        outside.responses = responses
+        source = HTTPServer(("127.0.0.1", 0), DashboardHandler)
+        source.responses = responses
+        threads = [
+            threading.Thread(target=server.serve_forever, daemon=True)
+            for server in (outside, source)
+        ]
+        for thread in threads:
+            thread.start()
+        try:
+            self.config = NodeConfig(
+                dashboard_base_url=f"http://127.0.0.1:{source.server_port}",
+                check_interval_seconds=60,
+                request_timeout_seconds=5,
+            )
+            for redirect_path, category in (
+                ("/healthz", "health_http_error"),
+                ("/api/metrics", "metrics_http_error"),
+            ):
+                with self.subTest(path=redirect_path):
+                    source.redirect_path = redirect_path
+                    outside_hits.clear()
+                    result = check_dashboard(self.config, NOW)
+                    self.assertFalse(result.success)
+                    self.assertEqual(result.category, category)
+                    self.assertEqual(outside_hits, [])
+        finally:
+            source.shutdown()
+            outside.shutdown()
+            for thread in threads:
+                thread.join()
+            source.server_close()
+            outside.server_close()
 
 
 class GatewayChecksTests(unittest.TestCase):
