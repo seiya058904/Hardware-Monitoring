@@ -1,6 +1,7 @@
 """Local persistence, logging, and Termux notification adaptation."""
 
 from dataclasses import asdict, fields
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 import logging
@@ -9,11 +10,17 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import time
 from typing import Callable
 
 from .node_checks import CheckResult
 from .node_state import NotificationEvent, TargetState
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 
 _STATE_FIELDS = {field.name for field in fields(TargetState)}
@@ -24,6 +31,8 @@ _NOTIFICATION_CONTENT_LIMIT = 512
 _LOG_DETAIL_LIMIT = 160
 _LOG_SUMMARY_INTERVAL_SECONDS = 3600
 _LOCK_FIELDS = frozenset(("pid", "started_at", "process_start_ticks", "script_path"))
+_LOCK_OPERATION_GUARD = threading.Lock()
+_LOCK_OPERATION_LOCKS: dict[str, threading.Lock] = {}
 
 
 def _read_process_cmdline(pid: int) -> list[str] | None:
@@ -68,6 +77,26 @@ def _lock_record_from_bytes(contents: bytes) -> dict[str, object] | None:
     return record
 
 
+@contextmanager
+def _lock_operation(lock_path: Path):
+    """Serialize cooperating lock operations, including the check-and-claim step."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    key = str(lock_path.resolve())
+    with _LOCK_OPERATION_GUARD:
+        thread_lock = _LOCK_OPERATION_LOCKS.setdefault(key, threading.Lock())
+    with thread_lock:
+        guard_path = lock_path.with_name(f".{lock_path.name}.guard")
+        descriptor = os.open(guard_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if fcntl is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+
 class InstanceLock:
     """An exclusive lock that treats only an exact live process record as active."""
 
@@ -75,6 +104,8 @@ class InstanceLock:
         self._lock_path = Path(lock_path)
         self._script_path = Path(script_path).resolve()
         self._record: dict[str, object] | None = None
+        self._owner_descriptor: int | None = None
+        self._owner_identity: tuple[int, int] | None = None
 
     def _new_record(self) -> dict[str, object] | None:
         start_ticks = _read_process_start_ticks(os.getpid())
@@ -89,21 +120,43 @@ class InstanceLock:
 
     def _create_exclusively(self, record: dict[str, object]) -> bool:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{self._lock_path.name}.", suffix=".lock", dir=self._lock_path.parent
+        )
+        temporary_path = Path(temporary_name)
+        published = False
         try:
-            descriptor = os.open(
-                self._lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-            )
-        except FileExistsError:
-            return False
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump(record, handle, sort_keys=True)
-                handle.flush()
-                os.fsync(handle.fileno())
+            contents = json.dumps(record, sort_keys=True).encode("utf-8")
+            while contents:
+                written = os.write(descriptor, contents)
+                if written <= 0:
+                    raise OSError("lock write failed")
+                contents = contents[written:]
+            os.fsync(descriptor)
+            os.link(temporary_path, self._lock_path)
+            owner = os.fstat(descriptor)
+            if fcntl is None:
+                os.close(descriptor)
+                descriptor = None
+            temporary_path.unlink()
+            published = True
             _sync_parent_directory(self._lock_path)
         except OSError:
             return False
+        finally:
+            if not published:
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                try:
+                    temporary_path.unlink()
+                except OSError:
+                    pass
         self._record = record
+        self._owner_descriptor = descriptor
+        self._owner_identity = (owner.st_dev, owner.st_ino)
         return True
 
     def _read_lock_record(self) -> tuple[dict[str, object] | None, bytes | None]:
@@ -133,44 +186,108 @@ class InstanceLock:
             and start_ticks == record["process_start_ticks"]
         )
 
+    def _claim_stale_lock(self, contents: bytes) -> bool:
+        descriptor, claim_name = tempfile.mkstemp(
+            prefix=f".{self._lock_path.name}.", suffix=".stale", dir=self._lock_path.parent
+        )
+        claim_path = Path(claim_name)
+        os.close(descriptor)
+        try:
+            if self._lock_path.read_bytes() != contents:
+                return False
+            os.replace(self._lock_path, claim_path)
+            if claim_path.read_bytes() != contents:
+                if not self._lock_path.exists():
+                    os.replace(claim_path, self._lock_path)
+                return False
+            claim_path.unlink()
+            _sync_parent_directory(self._lock_path)
+            return True
+        except OSError:
+            return False
+        finally:
+            if claim_path.exists():
+                try:
+                    claim_path.unlink()
+                except OSError:
+                    pass
+
+    def _owns_lock_path(self) -> bool:
+        if self._owner_identity is None:
+            return False
+        try:
+            current = self._lock_path.stat()
+        except OSError:
+            return False
+        return self._owner_identity == (current.st_dev, current.st_ino)
+
     def acquire(self) -> bool:
         """Acquire the lock, replacing only a verified stale lock record."""
         if self._record is not None:
-            return self._read_lock_record()[0] == self._record
+            return self._owns_lock_path() and self._read_lock_record()[0] == self._record
         record = self._new_record()
         if record is None:
             return False
-        while True:
-            if self._create_exclusively(record):
-                return True
-            existing, contents = self._read_lock_record()
-            if contents is None:
-                continue
-            if contents == b"":
-                return False
-            if existing is not None and self._is_active_matching_node(existing) is not False:
-                return False
-            try:
-                if self._lock_path.read_bytes() != contents:
-                    continue
-                self._lock_path.unlink()
-            except FileNotFoundError:
-                continue
-            except OSError:
-                return False
+        try:
+            with _lock_operation(self._lock_path):
+                while True:
+                    if self._create_exclusively(record):
+                        return True
+                    existing, contents = self._read_lock_record()
+                    if contents is None:
+                        continue
+                    if contents == b"":
+                        return False
+                    if existing is not None and self._is_active_matching_node(existing) is not False:
+                        return False
+                    if not self._claim_stale_lock(contents):
+                        return False
+        except OSError:
+            return False
 
     def release(self) -> None:
         """Remove only the exact record created by this lock instance."""
-        if self._record is None:
+        if self._record is None or self._owner_identity is None:
             return
         try:
-            if self._read_lock_record()[0] == self._record:
-                self._lock_path.unlink()
-                _sync_parent_directory(self._lock_path)
+            with _lock_operation(self._lock_path):
+                if not self._owns_lock_path() or self._read_lock_record()[0] != self._record:
+                    return
+                descriptor, claim_name = tempfile.mkstemp(
+                    prefix=f".{self._lock_path.name}.", suffix=".release", dir=self._lock_path.parent
+                )
+                claim_path = Path(claim_name)
+                os.close(descriptor)
+                try:
+                    os.replace(self._lock_path, claim_path)
+                    if self._owns_lock_path_for(claim_path):
+                        claim_path.unlink()
+                        _sync_parent_directory(self._lock_path)
+                    elif not self._lock_path.exists():
+                        os.replace(claim_path, self._lock_path)
+                finally:
+                    if claim_path.exists():
+                        claim_path.unlink()
         except OSError:
             pass
         finally:
+            if self._owner_descriptor is not None:
+                try:
+                    os.close(self._owner_descriptor)
+                except OSError:
+                    pass
+            self._owner_descriptor = None
+            self._owner_identity = None
             self._record = None
+
+    def _owns_lock_path_for(self, path: Path) -> bool:
+        if self._owner_identity is None:
+            return False
+        try:
+            current = path.stat()
+        except OSError:
+            return False
+        return self._owner_identity == (current.st_dev, current.st_ino)
 
 
 def _state_from_json(value: object) -> TargetState:

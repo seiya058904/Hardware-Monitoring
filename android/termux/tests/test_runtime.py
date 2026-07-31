@@ -185,6 +185,53 @@ class InstanceLockTests(unittest.TestCase):
             )
             self.assertIsInstance(record["started_at"], str)
 
+    def test_acquire_publishes_only_a_complete_lock_file(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            real_link = os.link
+            published = []
+
+            def recording_link(source, destination):
+                self.assertEqual(Path(destination), lock_path)
+                self.assertFalse(lock_path.exists())
+                published.append(json.loads(Path(source).read_text(encoding="utf-8")))
+                real_link(source, destination)
+
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+                patch("android.termux.node_runtime.os.link", recording_link),
+            ):
+                self.assertTrue(InstanceLock(lock_path, script_path).acquire())
+
+            self.assertEqual(len(published), 1)
+            self.assertEqual(published[0]["pid"], 101)
+
+    def test_stale_lock_is_atomically_moved_before_replacement(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            self.write_lock(lock_path, script_path)
+            real_replace = os.replace
+            claims = []
+
+            def recording_replace(source, destination):
+                if Path(source) == lock_path:
+                    claims.append(Path(destination))
+                real_replace(source, destination)
+
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime.os.kill", side_effect=ProcessLookupError),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+                patch("android.termux.node_runtime.os.replace", recording_replace),
+            ):
+                self.assertTrue(InstanceLock(lock_path, script_path).acquire())
+
+            self.assertEqual(len(claims), 1)
+            self.assertNotEqual(claims[0], lock_path)
+
     def test_active_matching_node_keeps_its_exclusive_lock(self):
         with TemporaryDirectory() as directory:
             lock_path = Path(directory) / "node.lock"
@@ -267,6 +314,24 @@ class InstanceLockTests(unittest.TestCase):
                 lock = InstanceLock(lock_path, script_path)
                 self.assertTrue(lock.acquire())
             self.write_lock(lock_path, script_path, pid=202, ticks=999)
+
+            lock.release()
+
+            self.assertTrue(lock_path.exists())
+
+    def test_release_keeps_an_equivalent_record_replaced_after_acquire(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+            ):
+                lock = InstanceLock(lock_path, script_path)
+                self.assertTrue(lock.acquire())
+            equivalent_path = Path(directory) / "equivalent.lock"
+            equivalent_path.write_bytes(lock_path.read_bytes())
+            os.replace(equivalent_path, lock_path)
 
             lock.release()
 
