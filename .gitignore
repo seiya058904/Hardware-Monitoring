@@ -16,11 +16,11 @@ HardwareMonitoring_Setup_*.exe
 config.json
 hardware_monitor.log
 
-# Screenshots / temp images
-*.png
+# Local screenshot
+1f696d5ba1c90d742e1a90a1bfbd53d7.png
 
 # Claude Code
 .claude/
 
-# Local planning notes
-docs/
+# Local planning note
+docs/superpowers/plans/2026-07-11-first-release-hardening.md
