@@ -10,6 +10,7 @@ from os import replace as os_replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import threading
 from unittest.mock import patch
 
 from android.termux.node_runtime import (
@@ -232,6 +233,91 @@ class InstanceLockTests(unittest.TestCase):
                 self.assertFalse(InstanceLock(lock_path, script_path).acquire())
 
             self.assertEqual(lock_path.read_bytes(), successor_contents)
+
+    def test_stale_final_unlink_serializes_a_competing_acquire(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            self.write_lock(lock_path, script_path)
+            started = threading.Event()
+            finished = threading.Event()
+            results = []
+            threads = []
+            real_unlink = Path.unlink
+
+            def process_alive(pid, signal):
+                if pid == 202:
+                    raise ProcessLookupError
+                self.assertEqual((pid, signal), (101, 0))
+
+            def competing_acquire():
+                started.set()
+                results.append(InstanceLock(lock_path, script_path).acquire())
+                finished.set()
+
+            def paused_unlink(path, *args, **kwargs):
+                if Path(path) == lock_path:
+                    thread = threading.Thread(target=competing_acquire)
+                    threads.append(thread)
+                    thread.start()
+                    self.assertTrue(started.wait(1))
+                    self.assertFalse(finished.wait(0.1))
+                return real_unlink(path, *args, **kwargs)
+
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime.os.kill", process_alive),
+                patch("android.termux.node_runtime._read_process_cmdline", return_value=[str(script_path)]),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+                patch("pathlib.Path.unlink", paused_unlink),
+            ):
+                self.assertTrue(InstanceLock(lock_path, script_path).acquire())
+                threads[0].join(1)
+                self.assertFalse(threads[0].is_alive())
+                self.assertEqual(results, [False])
+
+
+    def test_release_final_unlink_serializes_a_competing_acquire(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            started = threading.Event()
+            finished = threading.Event()
+            results = []
+            threads = []
+            real_unlink = Path.unlink
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+            ):
+                lock = InstanceLock(lock_path, script_path)
+                self.assertTrue(lock.acquire())
+
+            def competing_acquire():
+                started.set()
+                results.append(InstanceLock(lock_path, script_path).acquire())
+                finished.set()
+
+            def paused_unlink(path, *args, **kwargs):
+                if Path(path) == lock_path:
+                    thread = threading.Thread(target=competing_acquire)
+                    threads.append(thread)
+                    thread.start()
+                    self.assertTrue(started.wait(1))
+                    self.assertFalse(finished.wait(0.1))
+                return real_unlink(path, *args, **kwargs)
+
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+                patch("pathlib.Path.unlink", paused_unlink),
+            ):
+                lock.release()
+                threads[0].join(1)
+                self.assertFalse(threads[0].is_alive())
+                self.assertEqual(results, [True])
+                self.assertTrue(lock_path.exists())
+
 
     def test_active_matching_node_keeps_its_exclusive_lock(self):
         with TemporaryDirectory() as directory:

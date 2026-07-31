@@ -232,13 +232,13 @@ class InstanceLock:
 
     def acquire(self) -> bool:
         """Acquire the lock, replacing only a verified stale lock record."""
-        if self._record is not None:
-            return self._owns_lock_path() and self._read_lock_record()[0] == self._record
-        record = self._new_record()
-        if record is None:
-            return False
         try:
             with _lock_operation(self._lock_path):
+                if self._record is not None:
+                    return self._owns_lock_path() and self._read_lock_record()[0] == self._record
+                record = self._new_record()
+                if record is None:
+                    return False
                 while True:
                     if self._create_exclusively(record):
                         return True
