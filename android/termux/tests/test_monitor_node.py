@@ -189,7 +189,7 @@ class MonitorNodeTests(unittest.TestCase):
         ):
             code = monitor_node.run_forever(Path(directory) / "config.json")
 
-        self.assertEqual(code, 1)
+        self.assertEqual(code, monitor_node.INSTANCE_LOCK_CONTENDED_EXIT)
         self.assertFalse(lock.released)
 
     def test_run_forever_advances_saves_dispatches_and_waits_for_interval(self):

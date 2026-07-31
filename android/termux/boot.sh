@@ -4,7 +4,8 @@ set -eu
 NODE_HOME="${NODE_HOME:-$HOME/.local/share/hardware-monitor-node}"
 NODE_CONFIG="${NODE_CONFIG:-$NODE_HOME/config.json}"
 NODE_SCRIPT="${NODE_SCRIPT:-$NODE_HOME/monitor_node.py}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+PYTHON_BIN="${PYTHON_BIN:-/data/data/com.termux/files/usr/bin/python}"
+INSTANCE_LOCK_CONTENDED_EXIT=3
 
 config_values="$("$PYTHON_BIN" - "$NODE_CONFIG" "$NODE_SCRIPT" <<'PY'
 import sys
@@ -35,8 +36,10 @@ while :; do
         started_at="$(date +%s)"
         if "$PYTHON_BIN" "$NODE_SCRIPT" --config "$NODE_CONFIG"; then
             exit 0
+        else
+            exit_code=$?
         fi
-        exit_code=$?
+        [ "$exit_code" -eq "$INSTANCE_LOCK_CONTENDED_EXIT" ] && exit 0
         ended_at="$(date +%s)"
 
         if [ $((ended_at - started_at)) -ge "$stable_window_seconds" ]; then

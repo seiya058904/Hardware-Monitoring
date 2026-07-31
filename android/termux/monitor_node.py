@@ -31,6 +31,7 @@ from .node_state import advance_state, default_target_state
 
 NODE_HOME = Path.home() / ".local" / "share" / "hardware-monitor-node"
 DEFAULT_CONFIG_PATH = NODE_HOME / "config.json"
+INSTANCE_LOCK_CONTENDED_EXIT = 3
 
 
 def _run_command(command: list[str]) -> CompletedCommand:
@@ -80,7 +81,7 @@ def run_forever(config_path: Path) -> int:
     lock = InstanceLock(lock_path, Path(__file__))
     if not lock.acquire():
         logger.error("instance_lock_contended")
-        return 1
+        return INSTANCE_LOCK_CONTENDED_EXIT
 
     stop_event = threading.Event()
     previous_handlers = {}
