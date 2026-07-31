@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import socket
 import shutil
 import tempfile
 import subprocess
@@ -12,8 +13,9 @@ import sys
 import threading
 import time
 import tkinter as tk
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tkinter import ttk
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from collections import deque
 from pathlib import Path
 from typing import Dict, Optional
@@ -77,6 +79,8 @@ DEFAULT_CONFIG = {
     "show_group_titles": True,
     "fps_enabled": False,
     "fps_target_process": "",
+    "lan_dashboard_enabled": False,
+    "lan_dashboard_port": 8765,
     "show_cpu_usage": True,
     "show_memory_usage": True,
     "show_gpu_usage": True,
@@ -223,6 +227,111 @@ class Metrics:
     network_latency: str = "--"
     temp_hint: str = ""
     source_status: str = ""
+
+
+class _DashboardHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+
+class LanDashboardService:
+    """Small read-only HTTP server for a LAN dashboard."""
+
+    _PAGE = """<!doctype html><html lang=zh-CN><meta name=viewport content="width=device-width,initial-scale=1"><title>Hardware Monitoring</title><style>body{margin:0;background:#0c1018;color:#e8eef8;font:17px system-ui,sans-serif}main{max-width:760px;margin:auto;padding:16px}.status{color:#8ed0ff}.bad{color:#ff8f8f}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.card{background:#151d2b;border:1px solid #29364d;border-radius:9px;padding:12px}.k{color:#aebbd0;font-size:14px}.v{font-size:21px;margin-top:5px;word-break:break-word}@media(max-width:380px){body{font-size:16px}.v{font-size:19px}}</style><main><h2>Hardware Monitoring</h2><div id=s class=status>连接中…</div><p id=u>最后更新：--</p><div class=grid id=g></div><script>const fields=[['cpu_usage','CPU 使用率'],['cpu_temp','CPU 温度'],['cpu_freq','CPU 频率'],['cpu_power','CPU 功耗'],['gpu_usage','GPU 使用率'],['gpu_temp','GPU 温度'],['gpu_clock','GPU 频率'],['gpu_power','GPU 功耗'],['memory_usage','内存'],['gpu_memory','显存'],['disk_speed','磁盘活动'],['network_up','网络上传'],['network_down','网络下载'],['fps','FPS'],['fps_low_1','1% Low'],['source_status','采样状态']];const g=document.querySelector('#g');g.innerHTML=fields.map(x=>`<div class=card><div class=k>${x[1]}</div><div class=v id=${x[0]}>--</div></div>`).join('');async function tick(){try{let r=await fetch('/api/metrics',{cache:'no-store'});if(!r.ok)throw 0;let d=await r.json(),m=d.metrics;fields.forEach(x=>document.getElementById(x[0]).textContent=m[x[0]]??'--');let stale=!d.updated_at||Date.now()-Date.parse(d.updated_at)>5000;document.querySelector('#u').textContent='最后更新：'+(d.updated_at||'--');document.querySelector('#s').textContent=stale?'数据已过期':'电脑运行中';document.querySelector('#s').className=stale?'bad':'status'}catch(e){document.querySelector('#s').textContent='连接中断 / 数据已过期';document.querySelector('#s').className='bad'}}setInterval(tick,1000);tick();</script></main>"""
+
+    def __init__(self, snapshot_provider, updated_at_provider, logger: Optional[logging.Logger] = None) -> None:
+        self._snapshot_provider = snapshot_provider
+        self._updated_at_provider = updated_at_provider
+        self._logger = logger or logging.getLogger("hardware_monitor")
+        self._lock = threading.Lock()
+        self._server: Optional[ThreadingHTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+        self.port = 0
+
+    @staticmethod
+    def _safe_json_value(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if isinstance(value, dict):
+            return {str(key): LanDashboardService._safe_json_value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [LanDashboardService._safe_json_value(item) for item in value]
+        return value
+
+    @property
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._server is not None
+
+    @property
+    def is_alive(self) -> bool:
+        with self._lock:
+            return bool(self._thread and self._thread.is_alive())
+
+    def start(self, port: int = 8765) -> bool:
+        with self._lock:
+            if self._server is not None:
+                return False
+            service = self
+
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self, _format, *_args) -> None:
+                    return
+
+                def _send(self, code: int, body: bytes, content_type: str) -> None:
+                    self.send_response(code)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def do_GET(self) -> None:
+                    if len(self.path) > 2048:
+                        self._send(414, b"Request URI Too Long", "text/plain; charset=utf-8")
+                    elif self.path.split("?", 1)[0] == "/":
+                        self._send(200, service._PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                    elif self.path.split("?", 1)[0] == "/healthz":
+                        self._send(200, b'{"status":"ok"}', "application/json; charset=utf-8")
+                    elif self.path.split("?", 1)[0] == "/api/metrics":
+                        try:
+                            payload = {"status": "ok", "updated_at": service._updated_at_provider(), "metrics": service._snapshot_provider()}
+                            body = json.dumps(service._safe_json_value(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
+                            self._send(200, body, "application/json; charset=utf-8")
+                        except Exception:
+                            self._send(503, b'{"status":"unavailable"}', "application/json; charset=utf-8")
+                    else:
+                        self._send(404, b"Not Found", "text/plain; charset=utf-8")
+
+                def do_POST(self) -> None:
+                    self._send(405, b"Method Not Allowed", "text/plain; charset=utf-8")
+
+                do_PUT = do_POST
+                do_DELETE = do_POST
+                do_PATCH = do_POST
+
+            try:
+                server = _DashboardHTTPServer(("0.0.0.0", int(port)), Handler)
+                server.daemon_threads = True
+            except (OSError, ValueError) as exc:
+                self._logger.warning("LAN dashboard did not start on port %s: %s", port, exc)
+                return False
+            self._server = server
+            self.port = server.server_address[1]
+            self._thread = threading.Thread(target=server.serve_forever, name="lan-dashboard", daemon=True)
+            self._thread.start()
+            return True
+
+    def stop(self) -> None:
+        with self._lock:
+            server, thread = self._server, self._thread
+            self._server = None
+            self._thread = None
+            self.port = 0
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
 
 
 class SensorReader:
@@ -1451,6 +1560,8 @@ class OverlayApp:
         self._stop_event = threading.Event()
         self._metrics_lock = threading.Lock()
         self._latest_metrics = Metrics()
+        self._metrics_updated_at = 0.0
+        self.lan_dashboard = LanDashboardService(self._dashboard_snapshot, self._dashboard_updated_at, self.logger)
         self._ui_timer_id: Optional[str] = None
 
         self._setup_window()
@@ -1460,6 +1571,7 @@ class OverlayApp:
         self._setup_tray()
         self._apply_fps_config(force_restart=True)
         self._start_metrics_thread()
+        self._apply_lan_dashboard_config()
         self._update_metrics_loop()
 
     def _app_dir(self) -> Path:
@@ -1649,13 +1761,26 @@ class OverlayApp:
                 metrics = self.sensor_reader.read_metrics(self.config)
                 with self._metrics_lock:
                     self._latest_metrics = metrics
+                    self._metrics_updated_at = time.time()
                 self._stop_event.wait(max(0.25, int(self.config["refresh_interval_ms"]) / 1000.0))
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _dashboard_snapshot(self) -> dict:
+        with self._metrics_lock:
+            metrics = asdict(self._latest_metrics)
+        metrics["fps"] = self.fps_service.get_display_text()
+        metrics["fps_low_1"] = self.fps_service.get_low_display_text()
+        return metrics
+
+    def _dashboard_updated_at(self) -> str:
+        with self._metrics_lock:
+            updated_at = self._metrics_updated_at
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(updated_at)) if updated_at > 0 else ""
+
     def _update_metrics_loop(self) -> None:
         with self._metrics_lock:
-            metrics = self._latest_metrics
+            metrics = Metrics(**asdict(self._latest_metrics))
         is_en = str(self.config.get("ui_language", "zh")) == "en"
         metrics.fps = self.fps_service.get_display_text()
         metrics.fps_low_1 = self.fps_service.get_low_display_text()
@@ -1783,6 +1908,8 @@ class OverlayApp:
             "show_group_titles": bool(self.config.get("show_group_titles", True)),
             "fps_enabled": bool(self.config.get("fps_enabled", False)),
             "fps_target_process": str(self.config.get("fps_target_process", "")),
+            "lan_dashboard_enabled": bool(self.config.get("lan_dashboard_enabled", False)),
+            "lan_dashboard_port": int(self.config.get("lan_dashboard_port", 8765)),
             "log_level": str(self.config.get("log_level", "INFO")),
             "show_cpu_usage": bool(self.config.get("show_cpu_usage", True)),
             "show_memory_usage": bool(self.config.get("show_memory_usage", True)),
@@ -2093,11 +2220,23 @@ class OverlayApp:
         adv_card = tk.Frame(tab_advanced, bg=card_bg, highlightthickness=1, highlightbackground=border)
         adv_card.pack(fill="x", pady=(8, 0))
 
+        dashboard_frame = tk.Frame(adv_card, bg=card_bg)
+        dashboard_frame.pack(fill="x", padx=8, pady=8)
+        tk.Label(dashboard_frame, text=tr("局域网仪表盘", "LAN Dashboard"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
+        dashboard_enabled_var = tk.BooleanVar(value=state["lan_dashboard_enabled"])
+        tk.Checkbutton(dashboard_frame, text=tr("启用局域网仪表盘", "Enable LAN Dashboard"), variable=dashboard_enabled_var, bg=card_bg, fg=sub_fg, activebackground=card_bg, selectcolor=card_bg, font=("Segoe UI", 9), command=lambda: state.__setitem__("lan_dashboard_enabled", bool(dashboard_enabled_var.get()))).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        dashboard_port_var = tk.StringVar(value=str(state["lan_dashboard_port"]))
+        tk.Label(dashboard_frame, text=tr("端口", "Port"), bg=card_bg, fg=sub_fg, font=("Segoe UI", 9)).grid(row=1, column=1, sticky="e", padx=(12, 4))
+        tk.Entry(dashboard_frame, textvariable=dashboard_port_var, width=7, bg=win_bg, fg=text_fg, insertbackground=text_fg, relief="solid", bd=1).grid(row=1, column=2, sticky="w")
+        dashboard_address = self._lan_dashboard_address(state["lan_dashboard_port"])
+        tk.Label(dashboard_frame, text=tr(f"保存后生效。当前访问地址：{dashboard_address}\n手机须与电脑处于同一 Wi-Fi。", f"Applies after Save. Current address: {dashboard_address}\nPhone and PC must use the same Wi-Fi."), bg=card_bg, fg=hint_fg, font=("Segoe UI", 8), justify="left", wraplength=620).grid(row=2, column=0, columnspan=3, sticky="w", pady=(5, 0))
+
         # 重置所有设置
         def reset_all():
             if tk.messagebox.askyesno(tr("确认", "Confirm"), tr("确定要重置所有设置吗？\n需要重启生效。", "Reset all settings?\nRestart required.")):
                 self.config.update(DEFAULT_CONFIG.copy())
                 self._save_config()
+                self._apply_lan_dashboard_config()
                 if self.settings_window is not None and self.settings_window.winfo_exists():
                     self.settings_window.destroy()
                     self.settings_window = None
@@ -2146,7 +2285,14 @@ class OverlayApp:
 
         def save_and_close() -> None:
             state["fps_target_process"] = process_var.get()
+            try:
+                state["lan_dashboard_port"] = int(dashboard_port_var.get().strip())
+            except ValueError:
+                state["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
+            if not 1024 <= state["lan_dashboard_port"] <= 65535:
+                state["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
             apply_live(rebuild=False, apply_fps=True, force_fps_restart=True)
+            self._apply_lan_dashboard_config()
             self._set_autostart(bool(state.get("autostart", False)))
             # Apply log level
             try:
@@ -2192,6 +2338,25 @@ class OverlayApp:
         target = str(self.config.get("fps_target_process", "") or "")
         self.logger.info("Apply FPS config: enabled=%s target=%s force_restart=%s", enabled, target, force_restart)
         self.fps_service.configure(enabled=enabled, target_process=target, force_restart=force_restart)
+
+    def _apply_lan_dashboard_config(self) -> None:
+        if not bool(self.config.get("lan_dashboard_enabled", False)):
+            self.lan_dashboard.stop()
+            return
+        port = int(self.config.get("lan_dashboard_port", 8765))
+        if self.lan_dashboard.is_running and self.lan_dashboard.port == port:
+            return
+        self.lan_dashboard.stop()
+        if not self.lan_dashboard.start(port):
+            self.logger.warning("LAN dashboard remains disabled because port %s is unavailable", port)
+
+    def _lan_dashboard_address(self, port: int) -> str:
+        try:
+            addresses = {item[4][0] for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+            address = next((item for item in sorted(addresses) if not item.startswith("127.")), "127.0.0.1")
+        except OSError:
+            address = "127.0.0.1"
+        return f"http://{address}:{port}"
 
     def _list_process_names(self) -> list[str]:
         names = set()
@@ -2298,6 +2463,7 @@ class OverlayApp:
         if self.settings_window is not None and self.settings_window.winfo_exists():
             self.settings_window.destroy()
         self.fps_service.close()
+        self.lan_dashboard.stop()
         if self.tray_service is not None:
             self.tray_service.close()
         self.sensor_reader.close()
@@ -2400,6 +2566,12 @@ def load_config() -> dict:
     except Exception:
         config["fps_target_process"] = DEFAULT_CONFIG["fps_target_process"]
 
+    try:
+        port = int(config.get("lan_dashboard_port", DEFAULT_CONFIG["lan_dashboard_port"]))
+        config["lan_dashboard_port"] = port if 1024 <= port <= 65535 else DEFAULT_CONFIG["lan_dashboard_port"]
+    except Exception:
+        config["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
+
     raw_order = config.get("metric_order", [])
     if not isinstance(raw_order, list):
         raw_order = []
@@ -2440,6 +2612,7 @@ def load_config() -> dict:
         "show_fps",
         "show_fps_low_1",
         "show_target_process",
+        "lan_dashboard_enabled",
     ]
     for key in bool_keys:
         try:
