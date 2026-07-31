@@ -12,11 +12,17 @@ import tempfile
 import time
 from typing import Callable
 
+from .node_checks import CheckResult
 from .node_state import NotificationEvent, TargetState
 
 
 _STATE_FIELDS = {field.name for field in fields(TargetState)}
 _NOTIFICATION_ERROR_INTERVAL_SECONDS = 3600
+_NOTIFICATION_TARGETS = frozenset(("dashboard", "gateway", "internet"))
+_NOTIFICATION_TITLE_LIMIT = 128
+_NOTIFICATION_CONTENT_LIMIT = 512
+_LOG_DETAIL_LIMIT = 160
+_LOG_SUMMARY_INTERVAL_SECONDS = 3600
 
 
 def _state_from_json(value: object) -> TargetState:
@@ -38,35 +44,81 @@ def _state_from_json(value: object) -> TargetState:
     return TargetState(**value)
 
 
-def _corrupt_path(path: Path) -> Path:
+def _preserve_corrupt(path: Path, contents: bytes) -> bool:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    candidate = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
-    suffix = 1
-    while candidate.exists():
-        candidate = path.with_name(f"{path.stem}.corrupt-{stamp}-{suffix}{path.suffix}")
-        suffix += 1
-    return candidate
+    for suffix in range(100):
+        suffix_text = "" if suffix == 0 else f"-{suffix}"
+        candidate = path.with_name(f"{path.stem}.corrupt-{stamp}{suffix_text}{path.suffix}")
+        try:
+            descriptor = os.open(
+                candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+        except FileExistsError:
+            continue
+        except OSError:
+            return False
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(contents)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError:
+            return False
+        return True
+    return False
+
+
+def _state_corrupt(path: Path, contents: bytes) -> None:
+    category = "state_corrupt_isolated" if _preserve_corrupt(path, contents) else "state_corrupt_unpreserved"
+    logging.getLogger(__name__).warning(category)
 
 
 def load_state(path: Path) -> dict[str, TargetState]:
     """Load valid JSON state, isolating invalid input without executing it."""
-    if not path.exists():
+    try:
+        contents = path.read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        logging.getLogger(__name__).warning("state_unreadable")
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(contents)
         if not isinstance(payload, dict):
             raise ValueError("state must be a JSON object")
-        if any(not isinstance(target, str) or not target for target in payload):
-            raise ValueError("state target is invalid")
-        return {target: _state_from_json(value) for target, value in payload.items()}
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        try:
-            path.replace(_corrupt_path(path))
-        except OSError:
-            logging.getLogger(__name__).warning("state_corrupt_unpreserved")
-        else:
-            logging.getLogger(__name__).warning("state_corrupt_isolated")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        _state_corrupt(path, contents)
         return {}
+
+    states = {}
+    invalid = False
+    for target, value in payload.items():
+        if not isinstance(target, str) or not target:
+            invalid = True
+            continue
+        try:
+            states[target] = _state_from_json(value)
+        except (TypeError, ValueError):
+            invalid = True
+    if invalid:
+        _state_corrupt(path, contents)
+    return states
+
+
+def _sync_parent_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
 
 def save_state_atomic(path: Path, states: dict[str, TargetState]) -> None:
@@ -87,6 +139,7 @@ def save_state_atomic(path: Path, states: dict[str, TargetState]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
+        _sync_parent_directory(path)
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
@@ -109,6 +162,45 @@ def configure_logging(log_path: Path, max_bytes: int, backup_count: int) -> logg
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logger.addHandler(handler)
     return logger
+
+
+def _limited_text(value: object, limit: int) -> str:
+    return " ".join(str(value).split())[:limit]
+
+
+def log_check_result(
+    logger: logging.Logger,
+    result: CheckResult,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Log failures immediately and aggregate all check outcomes hourly."""
+    outcome = "healthy" if result.success is True else "failed" if result.success is False else "unknown"
+    now = monotonic()
+    counters = getattr(logger, "_hardware_monitor_summary", None)
+    if counters is None:
+        counters = {"started": now, "checks": 0, "healthy": 0, "failed": 0, "unknown": 0}
+    counters["checks"] += 1
+    counters[outcome] += 1
+    if outcome != "healthy":
+        logger.warning(
+            "check target=%s outcome=%s category=%s duration_ms=%s detail=%s",
+            _limited_text(result.target, 64),
+            outcome,
+            _limited_text(result.category, 64),
+            max(0, int(result.duration_ms)),
+            _limited_text(result.detail, _LOG_DETAIL_LIMIT),
+        )
+    if now - counters["started"] >= _LOG_SUMMARY_INTERVAL_SECONDS:
+        logger.info(
+            "summary checks=%s healthy=%s failed=%s unknown=%s",
+            counters["checks"],
+            counters["healthy"],
+            counters["failed"],
+            counters["unknown"],
+        )
+        counters = {"started": now, "checks": 0, "healthy": 0, "failed": 0, "unknown": 0}
+    logger._hardware_monitor_summary = counters
 
 
 def _run_notification(command: list[str]) -> int:
@@ -154,17 +246,31 @@ class NotificationClient:
             self._last_error_at = now
 
     def send(self, event: NotificationEvent) -> bool:
+        if (
+            not isinstance(event.target, str)
+            or event.target not in _NOTIFICATION_TARGETS
+            or event.notification_id != f"hardware-monitor-node-{event.target}"
+            or not isinstance(event.title, str)
+            or not isinstance(event.content, str)
+        ):
+            self._error("invalid_event")
+            return False
         return self._run(
             [
                 "termux-notification",
                 "--id",
                 event.notification_id,
                 "--title",
-                event.title,
+                event.title[:_NOTIFICATION_TITLE_LIMIT],
                 "--content",
-                event.content,
+                event.content[:_NOTIFICATION_CONTENT_LIMIT],
             ]
         )
 
     def cancel(self, notification_id: str) -> bool:
+        if not isinstance(notification_id, str) or notification_id not in {
+            f"hardware-monitor-node-{target}" for target in _NOTIFICATION_TARGETS
+        }:
+            self._error("invalid_event")
+            return False
         return self._run(["termux-notification-remove", "--id", notification_id])
