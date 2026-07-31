@@ -77,6 +77,14 @@ def _lock_record_from_bytes(contents: bytes) -> dict[str, object] | None:
     return record
 
 
+def _path_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
 @contextmanager
 def _lock_operation(lock_path: Path):
     """Serialize cooperating lock operations, including the check-and-claim step."""
@@ -186,27 +194,32 @@ class InstanceLock:
             and start_ticks == record["process_start_ticks"]
         )
 
-    def _claim_stale_lock(self, contents: bytes) -> bool:
+    def _claim_lock(
+        self, identity: tuple[int, int], contents: bytes | None = None
+    ) -> Path | None:
         descriptor, claim_name = tempfile.mkstemp(
-            prefix=f".{self._lock_path.name}.", suffix=".stale", dir=self._lock_path.parent
+            prefix=f".{self._lock_path.name}.", suffix=".claim", dir=self._lock_path.parent
         )
         claim_path = Path(claim_name)
         os.close(descriptor)
+        claimed = False
         try:
-            if self._lock_path.read_bytes() != contents:
-                return False
-            os.replace(self._lock_path, claim_path)
-            if claim_path.read_bytes() != contents:
-                if not self._lock_path.exists():
-                    os.replace(claim_path, self._lock_path)
-                return False
             claim_path.unlink()
+            os.link(self._lock_path, claim_path)
+            if _path_identity(claim_path) != identity:
+                return None
+            if contents is not None and claim_path.read_bytes() != contents:
+                return None
+            if _path_identity(self._lock_path) != identity:
+                return None
+            self._lock_path.unlink()
+            claimed = True
             _sync_parent_directory(self._lock_path)
-            return True
+            return claim_path
         except OSError:
-            return False
+            return None
         finally:
-            if claim_path.exists():
+            if not claimed and claim_path.exists():
                 try:
                     claim_path.unlink()
                 except OSError:
@@ -215,11 +228,7 @@ class InstanceLock:
     def _owns_lock_path(self) -> bool:
         if self._owner_identity is None:
             return False
-        try:
-            current = self._lock_path.stat()
-        except OSError:
-            return False
-        return self._owner_identity == (current.st_dev, current.st_ino)
+        return self._owner_identity == _path_identity(self._lock_path)
 
     def acquire(self) -> bool:
         """Acquire the lock, replacing only a verified stale lock record."""
@@ -240,7 +249,15 @@ class InstanceLock:
                         return False
                     if existing is not None and self._is_active_matching_node(existing) is not False:
                         return False
-                    if not self._claim_stale_lock(contents):
+                    identity = _path_identity(self._lock_path)
+                    if identity is None:
+                        continue
+                    claim_path = self._claim_lock(identity, contents)
+                    if claim_path is None:
+                        return False
+                    try:
+                        claim_path.unlink()
+                    except OSError:
                         return False
         except OSError:
             return False
@@ -253,18 +270,12 @@ class InstanceLock:
             with _lock_operation(self._lock_path):
                 if not self._owns_lock_path() or self._read_lock_record()[0] != self._record:
                     return
-                descriptor, claim_name = tempfile.mkstemp(
-                    prefix=f".{self._lock_path.name}.", suffix=".release", dir=self._lock_path.parent
-                )
-                claim_path = Path(claim_name)
-                os.close(descriptor)
+                claim_path = self._claim_lock(self._owner_identity)
+                if claim_path is None:
+                    return
                 try:
-                    os.replace(self._lock_path, claim_path)
                     if self._owns_lock_path_for(claim_path):
                         claim_path.unlink()
-                        _sync_parent_directory(self._lock_path)
-                    elif not self._lock_path.exists():
-                        os.replace(claim_path, self._lock_path)
                 finally:
                     if claim_path.exists():
                         claim_path.unlink()
@@ -283,11 +294,7 @@ class InstanceLock:
     def _owns_lock_path_for(self, path: Path) -> bool:
         if self._owner_identity is None:
             return False
-        try:
-            current = path.stat()
-        except OSError:
-            return False
-        return self._owner_identity == (current.st_dev, current.st_ino)
+        return self._owner_identity == _path_identity(path)
 
 
 def _state_from_json(value: object) -> TargetState:
