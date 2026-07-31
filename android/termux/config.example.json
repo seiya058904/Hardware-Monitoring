@@ -1,0 +1,17 @@
+{
+  "dashboard_base_url": "http://192.168.2.249:8765",
+  "check_interval_seconds": 60,
+  "request_timeout_seconds": 5,
+  "failure_threshold": 3,
+  "recovery_threshold": 2,
+  "reminder_interval_seconds": 3600,
+  "startup_delay_seconds": 30,
+  "log_max_bytes": 1048576,
+  "log_backup_count": 5,
+  "check_gateway": true,
+  "check_internet": true,
+  "internet_probe_urls": [
+    "https://connectivitycheck.gstatic.com/generate_204",
+    "https://www.cloudflare.com/cdn-cgi/trace"
+  ]
+}
