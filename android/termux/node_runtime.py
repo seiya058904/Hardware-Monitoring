@@ -23,6 +23,154 @@ _NOTIFICATION_TITLE_LIMIT = 128
 _NOTIFICATION_CONTENT_LIMIT = 512
 _LOG_DETAIL_LIMIT = 160
 _LOG_SUMMARY_INTERVAL_SECONDS = 3600
+_LOCK_FIELDS = frozenset(("pid", "started_at", "process_start_ticks", "script_path"))
+
+
+def _read_process_cmdline(pid: int) -> list[str] | None:
+    try:
+        contents = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return None
+    return [os.fsdecode(argument) for argument in contents.split(b"\0") if argument]
+
+
+def _read_process_start_ticks(pid: int) -> int | None:
+    try:
+        contents = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    closing_parenthesis = contents.rfind(")")
+    if closing_parenthesis < 0:
+        return None
+    fields_after_command = contents[closing_parenthesis + 1 :].split()
+    try:
+        start_ticks = int(fields_after_command[19])
+    except (IndexError, ValueError):
+        return None
+    return start_ticks if start_ticks >= 0 else None
+
+
+def _lock_record_from_bytes(contents: bytes) -> dict[str, object] | None:
+    try:
+        record = json.loads(contents)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict) or set(record) != _LOCK_FIELDS:
+        return None
+    if type(record["pid"]) is not int or record["pid"] <= 0:
+        return None
+    if type(record["process_start_ticks"]) is not int or record["process_start_ticks"] < 0:
+        return None
+    if not isinstance(record["started_at"], str) or not record["started_at"]:
+        return None
+    if not isinstance(record["script_path"], str) or not Path(record["script_path"]).is_absolute():
+        return None
+    return record
+
+
+class InstanceLock:
+    """An exclusive lock that treats only an exact live process record as active."""
+
+    def __init__(self, lock_path: Path, script_path: Path) -> None:
+        self._lock_path = Path(lock_path)
+        self._script_path = Path(script_path).resolve()
+        self._record: dict[str, object] | None = None
+
+    def _new_record(self) -> dict[str, object] | None:
+        start_ticks = _read_process_start_ticks(os.getpid())
+        if start_ticks is None:
+            return None
+        return {
+            "pid": os.getpid(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "process_start_ticks": start_ticks,
+            "script_path": str(self._script_path),
+        }
+
+    def _create_exclusively(self, record: dict[str, object]) -> bool:
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(
+                self._lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+        except FileExistsError:
+            return False
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(record, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _sync_parent_directory(self._lock_path)
+        except OSError:
+            return False
+        self._record = record
+        return True
+
+    def _read_lock_record(self) -> tuple[dict[str, object] | None, bytes | None]:
+        try:
+            contents = self._lock_path.read_bytes()
+        except FileNotFoundError:
+            return None, None
+        except OSError:
+            return None, b""
+        return _lock_record_from_bytes(contents), contents
+
+    def _is_active_matching_node(self, record: dict[str, object]) -> bool | None:
+        pid = record["pid"]
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return None
+        cmdline = _read_process_cmdline(pid)
+        start_ticks = _read_process_start_ticks(pid)
+        if cmdline is None or start_ticks is None:
+            return None
+        return (
+            str(self._script_path) == record["script_path"]
+            and str(self._script_path) in cmdline
+            and start_ticks == record["process_start_ticks"]
+        )
+
+    def acquire(self) -> bool:
+        """Acquire the lock, replacing only a verified stale lock record."""
+        if self._record is not None:
+            return self._read_lock_record()[0] == self._record
+        record = self._new_record()
+        if record is None:
+            return False
+        while True:
+            if self._create_exclusively(record):
+                return True
+            existing, contents = self._read_lock_record()
+            if contents is None:
+                continue
+            if contents == b"":
+                return False
+            if existing is not None and self._is_active_matching_node(existing) is not False:
+                return False
+            try:
+                if self._lock_path.read_bytes() != contents:
+                    continue
+                self._lock_path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return False
+
+    def release(self) -> None:
+        """Remove only the exact record created by this lock instance."""
+        if self._record is None:
+            return
+        try:
+            if self._read_lock_record()[0] == self._record:
+                self._lock_path.unlink()
+                _sync_parent_directory(self._lock_path)
+        except OSError:
+            pass
+        finally:
+            self._record = None
 
 
 def _state_from_json(value: object) -> TargetState:

@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from android.termux.node_runtime import (
+    InstanceLock,
     NotificationClient,
     configure_logging,
     log_check_result,
@@ -144,6 +145,132 @@ class RuntimeStateTests(unittest.TestCase):
                 save_state_atomic(path, {"dashboard": STATE})
 
             self.assertEqual(synced, [71])
+
+
+class InstanceLockTests(unittest.TestCase):
+    def write_lock(self, path, script_path, *, pid=202, ticks=999):
+        path.write_text(
+            json.dumps(
+                {
+                    "pid": pid,
+                    "started_at": "2026-07-31T10:00:00+00:00",
+                    "process_start_ticks": ticks,
+                    "script_path": str(script_path),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_exclusive_creation_writes_the_required_lock_record(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+            ):
+                lock = InstanceLock(lock_path, script_path)
+
+                self.assertTrue(lock.acquire())
+
+            record = json.loads(lock_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                record,
+                {
+                    "pid": 101,
+                    "started_at": record["started_at"],
+                    "process_start_ticks": 1001,
+                    "script_path": str(script_path),
+                },
+            )
+            self.assertIsInstance(record["started_at"], str)
+
+    def test_active_matching_node_keeps_its_exclusive_lock(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime.os.kill"),
+                patch("android.termux.node_runtime._read_process_cmdline", return_value=[str(script_path)]),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+            ):
+                self.assertTrue(InstanceLock(lock_path, script_path).acquire())
+                self.assertFalse(InstanceLock(lock_path, script_path).acquire())
+
+    def test_dead_pid_lock_is_replaced_without_signaling_a_process(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            self.write_lock(lock_path, script_path)
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime.os.kill", side_effect=ProcessLookupError) as kill,
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+            ):
+                self.assertTrue(InstanceLock(lock_path, script_path).acquire())
+
+            kill.assert_called_once_with(202, 0)
+            self.assertEqual(json.loads(lock_path.read_text(encoding="utf-8"))["pid"], 101)
+
+    def test_corrupt_lock_is_replaced(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            lock_path.write_text("not json", encoding="utf-8")
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+            ):
+                self.assertTrue(InstanceLock(lock_path, script_path).acquire())
+
+            self.assertEqual(json.loads(lock_path.read_text(encoding="utf-8"))["pid"], 101)
+
+    def test_active_pid_with_a_mismatched_cmdline_lock_is_replaced(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            self.write_lock(lock_path, script_path)
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime.os.kill"),
+                patch("android.termux.node_runtime._read_process_cmdline", return_value=["/other/script.py"]),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=999),
+            ):
+                self.assertTrue(InstanceLock(lock_path, script_path).acquire())
+
+            self.assertEqual(json.loads(lock_path.read_text(encoding="utf-8"))["pid"], 101)
+
+    def test_reused_pid_with_different_start_ticks_lock_is_replaced(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            self.write_lock(lock_path, script_path)
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime.os.kill"),
+                patch("android.termux.node_runtime._read_process_cmdline", return_value=[str(script_path)]),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1000),
+            ):
+                self.assertTrue(InstanceLock(lock_path, script_path).acquire())
+
+            self.assertEqual(json.loads(lock_path.read_text(encoding="utf-8"))["pid"], 101)
+
+    def test_release_does_not_remove_a_lock_replaced_by_another_instance(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+            ):
+                lock = InstanceLock(lock_path, script_path)
+                self.assertTrue(lock.acquire())
+            self.write_lock(lock_path, script_path, pid=202, ticks=999)
+
+            lock.release()
+
+            self.assertTrue(lock_path.exists())
 
 
 class RuntimeLoggingTests(unittest.TestCase):
