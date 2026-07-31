@@ -187,6 +187,21 @@ class InstanceLockTests(unittest.TestCase):
             )
             self.assertIsInstance(record["started_at"], str)
 
+    def test_exclusive_creation_falls_back_when_hard_links_are_unavailable(self):
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "node.lock"
+            script_path = (Path(directory) / "monitor_node.py").resolve()
+            with (
+                patch("android.termux.node_runtime.os.getpid", return_value=101),
+                patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001),
+                patch("android.termux.node_runtime.os.link", side_effect=AttributeError("link unavailable")),
+            ):
+                lock = InstanceLock(lock_path, script_path)
+                self.assertTrue(lock.acquire())
+                lock.release()
+
+            self.assertFalse(lock_path.exists())
+
     def test_acquire_publishes_only_a_complete_lock_file(self):
         with TemporaryDirectory() as directory:
             lock_path = Path(directory) / "node.lock"

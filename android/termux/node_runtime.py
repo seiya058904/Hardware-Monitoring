@@ -86,6 +86,40 @@ def _path_identity(path: Path) -> tuple[int, int] | None:
     return stat.st_dev, stat.st_ino
 
 
+def _link_or_copy_exclusive(source: Path, destination: Path) -> bool:
+    """Publish a private lock snapshot without requiring Android hard links."""
+    try:
+        os.link(source, destination)
+        return True
+    except AttributeError:
+        pass
+
+    descriptor: int | None = None
+    identity: tuple[int, int] | None = None
+    completed = False
+    try:
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        stat = os.fstat(descriptor)
+        identity = stat.st_dev, stat.st_ino
+        contents = source.read_bytes()
+        while contents:
+            written = os.write(descriptor, contents)
+            if written <= 0:
+                raise OSError("lock copy write failed")
+            contents = contents[written:]
+        os.fsync(descriptor)
+        completed = True
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if not completed and identity == _path_identity(destination):
+            try:
+                destination.unlink()
+            except OSError:
+                pass
+
+
 @contextmanager
 def _lock_operation(lock_path: Path):
     """Serialize cooperating lock operations, including the check-and-claim step."""
@@ -142,8 +176,10 @@ class InstanceLock:
                     raise OSError("lock write failed")
                 contents = contents[written:]
             os.fsync(descriptor)
-            os.link(temporary_path, self._lock_path)
-            owner = os.fstat(descriptor)
+            _link_or_copy_exclusive(temporary_path, self._lock_path)
+            owner_identity = _path_identity(self._lock_path)
+            if owner_identity is None:
+                raise OSError("lock publication missing")
             if fcntl is None:
                 os.close(descriptor)
                 descriptor = None
@@ -165,7 +201,7 @@ class InstanceLock:
                     pass
         self._record = record
         self._owner_descriptor = descriptor
-        self._owner_identity = (owner.st_dev, owner.st_ino)
+        self._owner_identity = owner_identity
         return True
 
     def _read_lock_record(self) -> tuple[dict[str, object] | None, bytes | None]:
@@ -206,8 +242,8 @@ class InstanceLock:
         claimed = False
         try:
             claim_path.unlink()
-            os.link(self._lock_path, claim_path)
-            if _path_identity(claim_path) != identity:
+            hard_linked = _link_or_copy_exclusive(self._lock_path, claim_path)
+            if hard_linked and _path_identity(claim_path) != identity:
                 return None
             if contents is not None and claim_path.read_bytes() != contents:
                 return None
