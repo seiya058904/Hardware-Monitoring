@@ -74,12 +74,18 @@ def advance_state(
 
     if result.success is True:
         updated = replace(current, last_success_at=timestamp, last_category=result.category)
-        if current.status == "failed":
-            return replace(updated, status="recovering", consecutive_failures=0, consecutive_successes=1), []
-        if current.status == "recovering":
-            successes = current.consecutive_successes + 1
+        if current.status in ("failed", "recovering"):
+            successes = 1 if current.status == "failed" else current.consecutive_successes + 1
             if successes < config.recovery_threshold:
-                return replace(updated, consecutive_failures=0, consecutive_successes=successes), []
+                return (
+                    replace(
+                        updated,
+                        status="recovering",
+                        consecutive_failures=0,
+                        consecutive_successes=successes,
+                    ),
+                    [],
+                )
             event = _notification(
                 result.target, "recovery", result.category, now, current.failure_started_at
             )
