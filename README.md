@@ -17,7 +17,7 @@ With built-in Chinese/English language switching, Hardware Monitoring fits daily
 
 ## 下载 / Downloads
 
-当前正式版本：v1.0.8  
+当前正式版本：v1.0.8
 Current stable release: v1.0.8
 
 - Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.8
