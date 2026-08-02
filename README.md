@@ -15,9 +15,15 @@ Hardware Monitoring is a lightweight, real-time performance monitoring tool for 
 The product uses a compact window with grouped information for fast readability, and provides practical controls including metric visibility toggles, refresh interval options, opacity adjustment, always-on-top mode, minimize-to-tray behavior, and customizable close-button actions. For gaming use cases, it supports target-process selection and FPS status display, while handling missing components or unavailable data gracefully through inline status text instead of intrusive popups.
 With built-in Chinese/English language switching, Hardware Monitoring fits daily productivity, gaming observation, and routine hardware health checks. The overall experience focuses on out-of-box usability, intuitive configuration, and reliable operation, delivering professional monitoring insights with a low learning curve.
 
-Releases
-v1.0.6
-https://github.com/seiya058904/Hardware-Monitoring/releases/tag/Hardware-Monitoring
+## 下载 / Downloads
+
+当前正式版本：v1.0.8  
+Current stable release: v1.0.8
+
+- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.8
+- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.8.exe`
+
+安装包 SHA-256 / Installer SHA-256：`E709BCBFD2B19555B6F4A70EF8D4BBF7E199693C7BD7A45E4D32118E4FB28B9E`
 
 运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
 卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
@@ -29,3 +35,9 @@ https://github.com/seiya058904/Hardware-Monitoring/releases/tag/Hardware-Monitor
 <img width="475" height="902" alt="image" src="https://github.com/user-attachments/assets/8b3a7b37-8b3b-4df3-8617-d46968ff386f" />
 
 <img width="764" height="694" alt="image" src="https://github.com/user-attachments/assets/bc32c3e2-4bfd-4ec3-b402-3ca316fc8b86" />
+
+## Android Termux 监控节点 / Android Termux Monitoring Node
+
+v1.0.8 提供可选的 Android Termux 监控节点，包含配置示例、安装与卸载脚本、启动脚本和健康检查。它适合需要从 Android 设备采集或上报监控状态的场景；仅使用 Windows 桌面悬浮监控时无需安装或配置此组件。
+
+v1.0.8 includes an optional Android Termux monitoring node with configuration examples, install/uninstall scripts, startup scripts, and health checks. It is intended for Android-based monitoring scenarios; no setup is required for normal Windows desktop overlay use.
