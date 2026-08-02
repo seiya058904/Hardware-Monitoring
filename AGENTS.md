@@ -2,83 +2,56 @@
 
 ## Project Overview
 
-`Hardware Monitoring` is a Windows-only hardware overlay written in Python with `tkinter`. The main entry point is `D:\xia zai\AI project\5.11\Hardware Monitoring\app.py`, which loads hardware metrics, FPS data, the tray icon, and the settings window in one process.
+`Hardware Monitoring` is a Windows desktop hardware overlay written in Python with `tkinter`. `app.py` is the single application entry point: it collects metrics, manages PresentMon FPS capture, the tray icon, settings UI, and the opt-in LAN dashboard. Runtime configuration and logs live in `%LOCALAPPDATA%\Hardware Monitoring`.
 
-The project is packaged with PyInstaller using `D:\xia zai\AI project\5.11\Hardware Monitoring\Hardware Monitoring.spec` and an NSIS installer in `D:\xia zai\AI project\5.11\Hardware Monitoring\Hardware Monitoring.nsi`. Runtime data is stored under `%LOCALAPPDATA%\Hardware Monitoring`; the repo root also contains pinned binaries and release artifacts used for packaging.
+The project packages with PyInstaller (`Hardware Monitoring.spec`) and NSIS (`Hardware Monitoring.nsi`). `android/termux/` is an optional, outbound-only Android Termux monitoring node; it is not needed for normal Windows overlay use.
 
-## Project Structure & Module Organization
+## Structure and Architecture
 
-- `D:\xia zai\AI project\5.11\Hardware Monitoring\app.py`: single-file application with metrics collection, FPS capture, tray icon, settings UI, and config loading.
-- `D:\xia zai\AI project\5.11\Hardware Monitoring\assets`: bundled app icon and UI assets.
-- `D:\xia zai\AI project\5.11\Hardware Monitoring\tools\PresentMon`: bundled PresentMon executable used for FPS data.
-- `D:\xia zai\AI project\5.11\Hardware Monitoring\_internal\libs`: pinned `LibreHardwareMonitorLib.dll` used when `pythonnet` is available.
-- `D:\xia zai\AI project\5.11\Hardware Monitoring\scripts`: helper scripts, including dependency download/verification.
-- `D:\xia zai\AI project\5.11\Hardware Monitoring\third_party`: third-party license files for the installer.
-- `D:\xia zai\AI project\5.11\Hardware Monitoring\docs`: planning notes and superpowers plans only; do not treat it as product docs.
+- `app.py`: `SensorReader`, `FpsService`, `TrayIconService`, `LanDashboardService`, and `OverlayApp`. Background workers write locked shared state; Tkinter's timer renders it.
+- `tests/`: standard-library `unittest` coverage for sensor-value filtering, PresentMon restart ownership, and the read-only LAN dashboard.
+- `android/termux/`: node scripts, JSON example configuration, Bash integration tests, and its operational README.
+- `tools/PresentMon/PresentMon.exe` and `_internal/libs/LibreHardwareMonitorLib.dll`: pinned package inputs. Keep their paths and hashes compatible with the spec file.
+- `assets/`, `third_party/licenses/`, and `THIRD_PARTY_NOTICES.md`: bundled application and license materials.
+- `scripts/fetch-dependencies.ps1`: downloads and verifies the pinned binary dependencies.
 
-Generated folders such as `build/`, `dist/`, `__pycache__/`, the built EXE, installer EXEs, and local logs are build outputs, not source.
+Generated `build/`, `dist/`, `_internal/`, `__pycache__/`, installers, logs, and local configuration are not source. Do not hand-edit generated package output.
 
-## Architecture Notes
+## Development, Build, and Tests
 
-`app.py` is intentionally monolithic. Key responsibilities are split by class: `SensorReader` gathers hardware data, `FpsService` owns one PresentMon worker generation at a time, `TrayIconService` owns the Windows tray icon, and `OverlayApp` builds the UI and main loop.
+Run commands from the repository root:
 
-Data flows from background worker threads into locked shared state, then the Tkinter timer refreshes visible labels. Config loading normalizes values and keeps the UI language, theme, and metric order consistent. Packaging depends on the exact bundled `tools` and `_internal/libs` inputs remaining in place.
-
-## Build, Test & Development Commands
-
-```bash
+```powershell
 python app.py
 python app.py --force-admin
 python -m py_compile app.py
+python -m unittest discover -s tests -v
 pyinstaller "Hardware Monitoring.spec" --noconfirm
 makensis "Hardware Monitoring.nsi"
 powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1
 ```
 
-- `python -m py_compile app.py` is the minimum static check.
-- `python app.py` or the built EXE is the runtime check when behavior changes.
-- `pyinstaller` builds the onedir distribution into `dist/Hardware Monitoring/`.
-- `makensis` builds the installer.
-- `scripts/fetch-dependencies.ps1` downloads and verifies pinned binary dependencies.
+- Use `python -m py_compile app.py` as the minimum syntax check after Python changes.
+- Run the relevant `unittest` suite for FPS, sensor, or LAN-dashboard behavior. UI, tray, packaging, or Windows-path changes also need a manual Windows run of `python app.py` or the packaged EXE.
+- Termux scripts are Bash-based; run their matching files under `android/termux/tests/` only in a compatible Bash/Termux environment.
+- There is no repository CI configuration. Do not infer deployment or release automation.
 
-Do not run deploy, publish, release, commit, push, or database-changing commands unless the user explicitly authorizes them.
+## Coding and Data Rules
 
-## Coding Style & Naming Conventions
+- Follow the existing Python style: four-space indentation, standard library first, small local changes, and `tr(zh, en)` for new visible UI text.
+- Preserve config keys, metric names, defaults, and the Windows behavior unless the requested change explicitly alters them. Keep `lan_dashboard_enabled` default-off; its HTTP endpoints are read-only and must not become remote control or public exposure.
+- Keep worker-owned state synchronized; do not update Tkinter widgets from a background thread.
+- Preserve the Termux node's private configuration and outbound-only boundary. Never add credentials to `config.example.json` or repository files.
 
-Follow the existing file’s style: Python 3, 4-space indentation, standard library first, and explicit `tr(zh, en)` pairs for UI text. Keep changes small and local. Preserve existing config keys, metric names, and Windows-specific behavior unless a change is requested.
+## Packaging and Security
 
-## Testing & Verification
+- Do not change pinned binaries, their checksums, the PyInstaller spec, or NSIS installer behavior without a packaging-specific review and verification.
+- Never commit credentials, private keys, keystores, local config, logs, build outputs, or temporary files. Treat network exposure, permissions, signing, release publication, and destructive cleanup as high-risk actions requiring explicit authorization.
+- The uninstaller intentionally preserves `%LOCALAPPDATA%\Hardware Monitoring`; do not change user-data retention without explicit approval.
 
-The regression tests use the standard-library `unittest` runner and live in `tests/test_fps_service.py` and `tests/test_sensor_reader.py`. Run `python -m unittest discover -s tests -v` for relevant behavior, plus `python -m py_compile app.py` for syntax verification. Then inspect the changed files and any generated diff noise with `git status --short`, `git diff --stat`, and `git diff --check`.
+## Commits, PRs, and Agent Boundaries
 
-If UI, tray, FPS, packaging, or runtime paths change, validate the behavior on Windows with `python app.py` or the packaged EXE. Browser-based visual inspection is not part of the default workflow here.
-
-## Commit & Pull Request Guidelines
-
-Recent commits are short, imperative, and scoped, for example `Add repo agent guidance`, `Fix runtime loading`, and `Harden first release packaging`. Keep future commits single-purpose and describe the actual behavior change. If a UI change needs review, include the validation result and any manual checks the user should perform.
-
-## Security & Configuration
-
-- Never commit `.env`, local config files, tokens, passwords, private keys, database strings, or other secrets.
-- Do not expose sensitive values in docs, replies, commit messages, or sample commands.
-- Do not check in local caches, logs, build output, or temporary files.
-- Treat auth, permissions, signing, billing, production config, and data-integrity changes as high risk and get explicit authorization first.
-
-## Agent-Specific Instructions
-
-- Read the relevant files before editing and state a brief plan.
-- Prefer the smallest reviewable diff that fixes the real cause.
-- Do not change unrelated code, formatting, or behavior.
-- Do not overwrite user edits or assume stale line numbers are still valid.
-- Do not install dependencies, auto-fix, format the whole repo, commit, push, deploy, or publish without explicit permission.
-- If a check was not run, say so plainly.
-
-## Pre-Commit Checklist
-
-- `git status --short`
-- `git diff --stat`
-- `git diff -- AGENTS.md`
-- Only the intended files changed
-- No secrets or local runtime files
-- Required checks run, or their absence stated clearly
-- Commit or push only after explicit authorization
+- Recent history uses short imperative, single-purpose commit subjects. Keep commits scoped and describe the behavior changed.
+- Before editing, read the affected code and trace its callers. Do not refactor unrelated code or overwrite existing user changes.
+- Before committing, run only the relevant checks, inspect `git diff --check`, `git diff --stat`, and `git status --short`, and verify that staging contains only intended files.
+- Do not install or update dependencies, commit, push, deploy, publish, merge, rebase, alter production settings, or perform bulk deletion unless the user explicitly authorizes that action.
