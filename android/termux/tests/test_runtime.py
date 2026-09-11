@@ -1,5 +1,6 @@
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
+import errno
 import json
 import logging
 import os
@@ -201,6 +202,17 @@ class InstanceLockTests(unittest.TestCase):
                 lock.release()
 
             self.assertFalse(lock_path.exists())
+
+    def test_unsupported_links_fallback_but_permission_failure_is_bounded(self):
+        for error, success in ((errno.EOPNOTSUPP, True), (errno.ENOSYS, True), (errno.EPERM, False), (errno.EACCES, False)):
+            with TemporaryDirectory() as directory, patch("android.termux.node_runtime._read_process_start_ticks", return_value=1001), patch("android.termux.node_runtime.os.link", side_effect=OSError(error, "injected")) as link:
+                lock = InstanceLock(Path(directory) / "node.lock", Path(directory) / "node.py")
+                self.assertEqual(success, lock.acquire())
+                self.assertLessEqual(link.call_count, 1)
+                if success:
+                    lock.release()
+                else:
+                    self.assertEqual("instance_lock_io_error", lock.error_code)
 
     def test_acquire_publishes_only_a_complete_lock_file(self):
         with TemporaryDirectory() as directory:

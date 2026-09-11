@@ -66,6 +66,25 @@ class DashboardChecksTests(unittest.TestCase):
         self.assertEqual(result.detail, category)
         self.assertEqual(result.checked_at, now)
 
+    def test_server_health_takes_precedence_over_clock_difference(self):
+        for state, success in (("ok", True), ("degraded", True), ("stale", False), ("stopping", False)):
+            payload = dict(status="ok", metrics={}, updated_at="2099-01-01T00:00:00Z",
+                           sample_state=state, sample_age_ms=100, sample_generation=1, error_code="")
+            result, _ = self.check([FakeResponse(200, b'{"status":"ok"}'), FakeResponse(200, json.dumps(payload).encode())])
+            self.assertEqual(success, result.success)
+
+    def test_partial_new_protocol_does_not_fallback(self):
+        payload = dict(status="ok", metrics={}, updated_at=NOW.isoformat(), sample_state="ok")
+        self.assert_failure([FakeResponse(200, b'{"status":"ok"}'), FakeResponse(200, json.dumps(payload).encode())], "sampling_health_invalid")
+
+    def test_old_protocol_future_tolerance(self):
+        for seconds, success in ((5, True), (6, False), (3600, False)):
+            payload = dict(status="ok", metrics={}, updated_at=(NOW + timedelta(seconds=seconds)).isoformat())
+            result, _ = self.check([FakeResponse(200, b'{"status":"ok"}'), FakeResponse(200, json.dumps(payload).encode())])
+            self.assertEqual(success, result.success)
+            if not success:
+                self.assertEqual("clock_skew", result.category)
+
     def test_unreachable_health_is_classified_without_request_details(self):
         for error in (URLError("private host failed"), ConnectionRefusedError("connection refused")):
             with self.subTest(error=error):

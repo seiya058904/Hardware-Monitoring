@@ -1,6 +1,9 @@
 import ctypes
 import ctypes.wintypes
 import csv
+import hashlib
+import ipaddress
+import uuid
 import json
 import logging
 import math
@@ -14,11 +17,16 @@ import threading
 import time
 import tkinter as tk
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from dataclasses import asdict, dataclass
 from collections import deque
 from pathlib import Path
 from typing import Dict, Optional
+
+from fps_sessions import SessionRegistry
+from fps_stream import CaptureStream
+from sensor_runtime import SensorRuntime
+from dashboard_server import DashboardHTTPServer
 
 import psutil
 try:
@@ -79,6 +87,7 @@ DEFAULT_CONFIG = {
     "show_group_titles": True,
     "fps_enabled": False,
     "fps_target_process": "",
+    "gpu_device_id": None,
     "lan_dashboard_enabled": False,
     "lan_dashboard_port": 8765,
     "show_cpu_usage": True,
@@ -197,6 +206,23 @@ GROUP_LABEL_EN = {
 }
 
 
+def status_text(code, en=False):
+    translations = {
+        "ok": ("正常", "OK"), "degraded": ("部分设备不可用", "Some devices unavailable"),
+        "stale": ("数据已过期", "Data stale"), "unavailable": ("尚无可用数据", "Data unavailable"),
+        "stopping": ("正在停止", "Stopping"), "not_sampled": ("尚未采集", "Not sampled"),
+        "no_sensor_data": ("尚无可用数据", "No sensor data"),
+        "sample_read_failed": ("采样失败", "Sampling failed"), "sample_stale": ("数据已过期", "Data stale"),
+        "device_read_failed": ("设备读取失败", "Device read failed"),
+        "temperatures_unavailable": ("CPU/GPU 温度接口不可用", "CPU/GPU temperature sensors unavailable"),
+        "cpu_temperature_unavailable": ("CPU 温度接口不可用", "CPU temperature sensor unavailable"),
+        "gpu_temperature_unavailable": ("GPU 温度接口不可用", "GPU temperature sensor unavailable"),
+        "关闭": ("关闭", "Off"), "未选择": ("未选择", "Not selected"), "不可用": ("不可用", "Unavailable"),
+        "充电中": ("充电中", "Charging"), "使用中": ("使用中", "On battery"),
+    }
+    return translations.get(code, (code, code))[int(en)]
+
+
 @dataclass
 class Metrics:
     cpu_usage: str = "N/A"
@@ -227,18 +253,29 @@ class Metrics:
     network_latency: str = "--"
     temp_hint: str = ""
     source_status: str = ""
+    battery_percent: Optional[float] = None
 
 
-class _DashboardHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = False
+def format_metric(key, metrics, en=False):
+    value = status_text(str(getattr(metrics, key, "--")), en)
+    if key == "battery_status" and metrics.battery_percent is not None:
+        value = f"{metrics.battery_percent:.0f}% ({value})"
+    return "--" if value in ("", "N/A", "None") else value
+
+
+PUBLIC_METRIC_FIELDS = ('cpu_usage', 'cpu_freq', 'cpu_temp', 'gpu_usage', 'gpu_temp', 'cpu_fan', 'gpu_fan', 'gpu_clock', 'vram_freq', 'gpu_memory', 'memory_usage', 'memory_freq', 'cpu_power', 'gpu_power', 'disk_speed', 'disk_read', 'disk_write', 'network_speed', 'network_up', 'network_down', 'battery_status', 'fps', 'fps_low_1', 'target_process', 'ssd_temp', 'network_latency', 'temp_hint', 'source_status')
+
+class _DashboardHTTPServer(DashboardHTTPServer):
+    pass
 
 
 class LanDashboardService:
     """Small read-only HTTP server for a LAN dashboard."""
 
-    _PAGE = """<!doctype html><html lang=zh-CN><meta name=viewport content="width=device-width,initial-scale=1"><title>Hardware Monitoring</title><style>body{margin:0;background:#0c1018;color:#e8eef8;font:17px system-ui,sans-serif}main{max-width:760px;margin:auto;padding:16px}.status{color:#8ed0ff}.bad{color:#ff8f8f}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.card{background:#151d2b;border:1px solid #29364d;border-radius:9px;padding:12px}.k{color:#aebbd0;font-size:14px}.v{font-size:21px;margin-top:5px;word-break:break-word}@media(max-width:380px){body{font-size:16px}.v{font-size:19px}}</style><main><h2>Hardware Monitoring</h2><div id=s class=status>连接中…</div><p id=u>最后更新：--</p><div class=grid id=g></div><script>const fields=[['cpu_usage','CPU 使用率'],['cpu_temp','CPU 温度'],['cpu_freq','CPU 频率'],['cpu_power','CPU 功耗'],['gpu_usage','GPU 使用率'],['gpu_temp','GPU 温度'],['gpu_clock','GPU 频率'],['gpu_power','GPU 功耗'],['memory_usage','内存'],['gpu_memory','显存'],['disk_speed','磁盘活动'],['network_up','网络上传'],['network_down','网络下载'],['fps','FPS'],['fps_low_1','1% Low'],['source_status','采样状态']];const g=document.querySelector('#g');g.innerHTML=fields.map(x=>`<div class=card><div class=k>${x[1]}</div><div class=v id=${x[0]}>--</div></div>`).join('');async function tick(){try{let r=await fetch('/api/metrics',{cache:'no-store'});if(!r.ok)throw 0;let d=await r.json(),m=d.metrics;fields.forEach(x=>document.getElementById(x[0]).textContent=m[x[0]]??'--');let stale=!d.updated_at||Date.now()-Date.parse(d.updated_at)>5000;document.querySelector('#u').textContent='最后更新：'+(d.updated_at||'--');document.querySelector('#s').textContent=stale?'数据已过期':'电脑运行中';document.querySelector('#s').className=stale?'bad':'status'}catch(e){document.querySelector('#s').textContent='连接中断 / 数据已过期';document.querySelector('#s').className='bad'}}setInterval(tick,1000);tick();</script></main>"""
+    _PAGE = """<!doctype html><html lang=zh-CN><meta name=viewport content="width=device-width,initial-scale=1"><title>Hardware Monitoring</title><style>body{margin:0;background:#0c1018;color:#e8eef8;font:17px system-ui,sans-serif}main{max-width:760px;margin:auto;padding:16px}.status{color:#8ed0ff}.bad{color:#ff8f8f}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.card{background:#151d2b;border:1px solid #29364d;border-radius:9px;padding:12px}.k{color:#aebbd0;font-size:14px}.v{font-size:21px;margin-top:5px;word-break:break-word}@media(max-width:380px){body{font-size:16px}.v{font-size:19px}}</style><main><h2>Hardware Monitoring</h2><div id=s class=status>连接中…</div><p id=u>最后更新：--</p><div class=grid id=g></div><script>const fields=[['cpu_usage','CPU 使用率'],['cpu_temp','CPU 温度'],['cpu_freq','CPU 频率'],['cpu_power','CPU 功耗'],['gpu_usage','GPU 使用率'],['gpu_temp','GPU 温度'],['gpu_clock','GPU 频率'],['gpu_power','GPU 功耗'],['memory_usage','内存'],['gpu_memory','显存'],['disk_speed','磁盘活动'],['network_up','网络上传'],['network_down','网络下载'],['fps','FPS'],['fps_low_1','1% Low'],['source_status','采样状态']];const g=document.querySelector('#g');g.innerHTML=fields.map(x=>`<div class=card><div class=k>${x[1]}</div><div class=v id=${x[0]}>--</div></div>`).join('');function sampleHealth(d){const keys=['sample_state','sample_age_ms','sample_generation','error_code'];if(keys.some(k=>k in d)){const state=d.sample_state,age=d.sample_age_ms;if(!keys.every(k=>k in d)||!['ok','degraded','stale','unavailable','stopping'].includes(state)||!Number.isInteger(d.sample_generation)||d.sample_generation<0||typeof d.error_code!=='string'||!(age===null||(Number.isInteger(age)&&age>=0))||(['ok','degraded'].includes(state)&&(age===null||d.sample_generation===0)))return 'invalid';return state}let stamp=Date.parse(d.updated_at),age=Date.now()-stamp;if(!Number.isFinite(stamp))return 'invalid';if(age < -5000)return 'clock_skew';return age>5000?'stale':'ok'}async function tick(){try{let r=await fetch('/api/metrics',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw 0;let d=await r.json(),m=d.metrics;if(d.status!=='ok'||!m||typeof m!=='object'||Array.isArray(m))throw 0;let state=sampleHealth(d),good=['ok','degraded'].includes(state);fields.forEach(x=>document.getElementById(x[0]).textContent=good?(m[x[0]]??'--'):'--');document.querySelector('#u').textContent='最后更新：'+(d.updated_at||'--');const labels={ok:'电脑运行中',degraded:'部分设备不可用',stale:'数据已过期',unavailable:'尚无可用数据',stopping:'正在停止',clock_skew:'时钟偏差 / Clock skew',invalid:'数据协议异常'};document.querySelector('#s').textContent=labels[state];document.querySelector('#s').className=state==='ok'?'status':'bad'}catch(e){document.querySelector('#s').textContent='连接中断 / 数据已过期';document.querySelector('#s').className='bad'}finally{setTimeout(tick,1000)}}tick();</script></main>"""
 
-    def __init__(self, snapshot_provider, updated_at_provider, logger: Optional[logging.Logger] = None) -> None:
+    def __init__(self, snapshot_provider, updated_at_provider, logger: Optional[logging.Logger] = None, payload_provider=None) -> None:
+        self._payload_provider = payload_provider
         self._snapshot_provider = snapshot_provider
         self._updated_at_provider = updated_at_provider
         self._logger = logger or logging.getLogger("hardware_monitor")
@@ -260,7 +297,7 @@ class LanDashboardService:
     @property
     def is_running(self) -> bool:
         with self._lock:
-            return self._server is not None
+            return self._server is not None and self._server.active.is_set()
 
     @property
     def is_alive(self) -> bool:
@@ -278,14 +315,19 @@ class LanDashboardService:
                     return
 
                 def _send(self, code: int, body: bytes, content_type: str) -> None:
+                    if not self.server.active.is_set():
+                        return
                     self.send_response(code)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Content-Length", str(len(body)))
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
-                    self.wfile.write(body)
+                    if self.server.active.is_set():
+                        self.wfile.write(body)
 
                 def do_GET(self) -> None:
+                    if not self.server.active.is_set():
+                        return
                     if len(self.path) > 2048:
                         self._send(414, b"Request URI Too Long", "text/plain; charset=utf-8")
                     elif self.path.split("?", 1)[0] == "/":
@@ -294,7 +336,9 @@ class LanDashboardService:
                         self._send(200, b'{"status":"ok"}', "application/json; charset=utf-8")
                     elif self.path.split("?", 1)[0] == "/api/metrics":
                         try:
-                            payload = {"status": "ok", "updated_at": service._updated_at_provider(), "metrics": service._snapshot_provider()}
+                            if not self.server.active.is_set():
+                                return
+                            payload = service._payload_provider() if service._payload_provider else {"status": "ok", "updated_at": service._updated_at_provider(), "metrics": service._snapshot_provider()}
                             body = json.dumps(service._safe_json_value(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
                             self._send(200, body, "application/json; charset=utf-8")
                         except Exception:
@@ -321,17 +365,26 @@ class LanDashboardService:
             self._thread.start()
             return True
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
         with self._lock:
             server, thread = self._server, self._thread
-            self._server = None
-            self._thread = None
-            self.port = 0
+            if server is not None:
+                server.revoke()
         if server is not None:
             server.shutdown()
             server.server_close()
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2)
+        clean = (server is None or server.join_clients()) and not (thread and thread.is_alive())
+        if clean:
+            with self._lock:
+                if self._server is server:
+                    self._server = None
+                    self._thread = None
+                    self.port = 0
+        else:
+            self._logger.error("LAN shutdown incomplete")
+        return clean
 
 
 class SensorReader:
@@ -376,6 +429,11 @@ class SensorReader:
         ]
 
     def __init__(self) -> None:
+        self._identifier_reader = None
+        self.device_outcomes = {}
+        self.gpu_devices = []
+        self._selected_gpu = None
+        self._requested_gpu = None
         self._lhm_computer = None
         self._lhm_hardware = None
         self._lhm_error = ""
@@ -408,8 +466,11 @@ class SensorReader:
         return Path(__file__).resolve().parent
 
     def _init_lhm(self) -> None:
+        self._lhm_computer = None
+        self._lhm_hardware = None
+        self._lhm_error = ""
         if clr is None:
-            self._lhm_error = "pythonnet 未加载"
+            self._lhm_error = "pythonnet unavailable"
             return
 
         candidates = [
@@ -419,13 +480,23 @@ class SensorReader:
         ]
         dll_path = next((path for path in candidates if path.exists()), candidates[0])
         if not dll_path.exists():
-            self._lhm_error = f"缺少 DLL: {dll_path}"
+            self._lhm_error = f"Missing DLL: {dll_path}"
             logging.getLogger("hardware_monitor").warning("LibreHardwareMonitor DLL missing: %s", dll_path)
             return
 
+        computer = None
         try:
             clr.AddReference(str(dll_path))
             from LibreHardwareMonitor import Hardware  # type: ignore
+            # Keep Identifier inside the CLR. Wrapping its concrete type in pythonnet
+            # reflects an unused HidSharp constructor absent from the pinned package.
+            clr.AddReference("System.Core")
+            from System import Func, String, Array, Type
+            from System.Linq.Expressions import Expression, ParameterExpression
+            parameter = Expression.Parameter(clr.GetClrType(Hardware.IHardware), "hardware")
+            member = Expression.Property(parameter, "Identifier")
+            call = Expression.Call(member, member.Type.GetMethod("ToString", Array[Type]([])))
+            self._identifier_reader = Expression.Lambda[Func[Hardware.IHardware, String]](call, Array[ParameterExpression]([parameter])).Compile()
 
             computer = Hardware.Computer()
             computer.IsCpuEnabled = True
@@ -439,9 +510,14 @@ class SensorReader:
             self._lhm_computer = computer
             self._lhm_hardware = Hardware
         except Exception:
+            if computer is not None:
+                try:
+                    computer.Close()
+                except Exception:
+                    pass
             self._lhm_computer = None
             self._lhm_hardware = None
-            self._lhm_error = "LHM 初始化失败(运行库兼容性或驱动限制)"
+            self._lhm_error = "LHM initialization failed (runtime or driver)"
             logging.getLogger("hardware_monitor").exception("LibreHardwareMonitor initialization failed")
 
     def _start_external_lhm_if_available(self) -> None:
@@ -469,25 +545,78 @@ class SensorReader:
             if self._lhm_computer is not None:
                 self._lhm_computer.Close()
         except Exception:
-            pass
+            logging.getLogger("hardware_monitor").exception("LHM close failed")
+            raise
+        finally:
+            self._lhm_computer = None
+            self._lhm_hardware = None
         try:
             if self._external_lhm_proc is not None and self._external_lhm_proc.poll() is None:
                 self._external_lhm_proc.terminate()
         except Exception:
             pass
 
-    def _walk_sensors(self):
-        if self._lhm_computer is None:
-            return []
+    def _hardware_identity(self, hardware):
+        if self._identifier_reader is not None:
+            return str(self._identifier_reader(hardware))
+        return str(hardware.Identifier)
 
+    def _walk_sensors(self):
+        self.device_outcomes = {}
+        self.gpu_devices = []
+        if self._lhm_computer is None:
+            self.device_outcomes["lhm"] = False
+            return []
+        self.device_outcomes["lhm"] = True
         entries = []
-        for hw in self._lhm_computer.Hardware:
-            hw.Update()
-            entries.append(hw)
-            for sub_hw in hw.SubHardware:
-                sub_hw.Update()
-                entries.append(sub_hw)
-        return entries
+        def visit(hw, gpu_parent=None):
+            try:
+                identity = self._hardware_identity(hw)
+            except Exception:
+                self.device_outcomes["unidentified_device"] = False
+                return
+            try:
+                kind = str(hw.HardwareType)
+                if "Gpu" in kind and gpu_parent is None:
+                    gpu_parent = identity
+                    self.gpu_devices.append((identity, str(hw.Name)))
+                hw.Update()
+                entries.append((hw, gpu_parent))
+                self.device_outcomes[identity] = True
+            except Exception:
+                self.device_outcomes[identity] = False
+            try:
+                children = list(hw.SubHardware)
+            except Exception:
+                self.device_outcomes[identity] = False
+                children = []
+            for child in children:
+                visit(child, gpu_parent)
+        try:
+            for hw in self._lhm_computer.Hardware:
+                visit(hw)
+        except Exception:
+            self.device_outcomes["lhm"] = False
+        identities = sorted(identity for identity, name in self.gpu_devices)
+        self._selected_gpu = self._requested_gpu if self._requested_gpu is not None else (identities[0] if identities else None)
+        return [hw for hw, gpu in entries if gpu is None or gpu == self._selected_gpu]
+
+    def _safe_sensors(self, hw):
+        from types import SimpleNamespace
+        identity = self._hardware_identity(hw)
+        try:
+            sensors = hw.Sensors
+            for sensor in sensors:
+                try:
+                    if sensor.Value is None:
+                        continue
+                    value = float(sensor.Value)
+                    if math.isfinite(value):
+                        yield SimpleNamespace(Value=value, Name=str(sensor.Name), SensorType=sensor.SensorType)
+                except Exception:
+                    self.device_outcomes[identity] = False
+        except Exception:
+            self.device_outcomes[identity] = False
 
     @staticmethod
     def _pick_max(current: Optional[float], candidate: float) -> Optional[float]:
@@ -571,9 +700,7 @@ class SensorReader:
         }
 
         if self._lhm_computer is None or self._lhm_hardware is None:
-            if self._lhm_retry_count < 3:
-                self._lhm_retry_count += 1
-                self._init_lhm()
+            self.device_outcomes = {"lhm": False}
             return values
 
         sensor_type = self._lhm_hardware.SensorType
@@ -583,7 +710,7 @@ class SensorReader:
         try:
             for hw in self._walk_sensors():
                 hw_type_name = str(hw.HardwareType)
-                for sensor in hw.Sensors:
+                for sensor in self._safe_sensors(hw):
                     if sensor.Value is None:
                         continue
 
@@ -615,8 +742,7 @@ class SensorReader:
                         else:
                             if values["cpu_temp"] is None and "cpu" in s_name:
                                 values["cpu_temp"] = sensor_value
-                            if values["gpu_temp"] is None and "gpu" in s_name:
-                                values["gpu_temp"] = sensor_value
+
 
                     if sensor.SensorType == sensor_type.Clock:
                         if "Cpu" in hw_type_name and s_name.startswith("core #"):
@@ -654,6 +780,24 @@ class SensorReader:
             values["gpu_temp"] = gpu_fallback
 
         return values
+
+    def _read_smi_devices(self):
+        if not self._nvidia_smi:
+            return {}
+        output = self._run_cmd([self._nvidia_smi, "--query-gpu=uuid,name,utilization.gpu,temperature.gpu,clocks.current.graphics,power.draw,memory.used,memory.total", "--format=csv,noheader,nounits"])
+        devices = {}
+        for row in csv.reader(output.splitlines()):
+            if len(row) != 8 or not row[0].strip().startswith("GPU-"):
+                continue
+            values = {}
+            for key, raw in zip(("gpu_usage", "gpu_temp", "gpu_clock", "gpu_power", "gpu_memory_used", "gpu_memory_total"), row[2:]):
+                try:
+                    value = float(raw.strip())
+                    values[key] = value if math.isfinite(value) and value >= 0 else None
+                except ValueError:
+                    values[key] = None
+            devices["nvidia:" + row[0].strip()] = (row[1].strip(), values)
+        return devices
 
     @staticmethod
     def _run_cmd(cmd: list[str], timeout: float = 0.8) -> str:
@@ -833,9 +977,11 @@ class SensorReader:
     def _read_fallback_values(self, lhm: Dict[str, Optional[float]], config: dict) -> Dict[str, Optional[float]]:
         now = time.time()
         needs_cpu_temp = bool(config.get("show_cpu_temperature", True)) and lhm.get("cpu_temp") is None
-        needs_gpu_temp = bool(config.get("show_gpu_temperature", True)) and lhm.get("gpu_temp") is None
+        needs_gpu_temp = False  # No verified cross-provider device identity.
         needs_memory_freq = bool(config.get("show_memory_freq", False)) and lhm.get("memory_freq") is None
-        needs_vram = bool(config.get("show_vram_usage", True)) and (lhm.get("gpu_memory_used") is None or lhm.get("gpu_memory_total") is None)
+        needs_vram = False
+        self._fallback_cache["gpu_temp"] = None
+        self._fallback_cache["gpu_vram"] = None
         needs_fallback = needs_cpu_temp or needs_gpu_temp or needs_memory_freq or needs_vram
         if not needs_fallback:
             return self._fallback_cache
@@ -860,25 +1006,26 @@ class SensorReader:
             "memory_freq": mem_wmi,
             "gpu_vram": gpu_vram,
         }
-        acpi_status = "失败"
+        acpi_status = "unavailable"
         if cpu_wmi is not None:
-            acpi_status = f"{cpu_wmi:.1f}C(系统热区,非核心温度)"
+            acpi_status = f"{cpu_wmi:.1f}C (ACPI zone, not CPU core)"
         self._last_status = {
-            "LHM": "OK" if self._lhm_computer is not None else f"不可用({self._lhm_error})",
-            "外部LHM": "已禁用(避免弹出驱动安装提示)",
-            "CoreTemp共享内存": "OK" if cpu_coretemp is not None else "未运行/未开放",
-            "ACPI热区": acpi_status,
-            "CPU共享WMI": "OK" if cpu_ohm is not None else "失败",
-            "CPU-LHM-WMI": "OK" if cpu_lhm_wmi is not None else "失败",
-            "GPU nvidia-smi": "OK" if gpu_smi is not None else "失败",
-            "GPU共享WMI": "OK" if gpu_ohm is not None else "失败",
-            "GPU-LHM-WMI": "OK" if gpu_lhm_wmi is not None else "失败",
-            "内存频率WMI": "OK" if mem_wmi is not None else "失败",
+            "LHM": "OK" if self._lhm_computer is not None else f"unavailable ({self._lhm_error})",
+            "External LHM": "disabled",
+            "CoreTemp": "OK" if cpu_coretemp is not None else "unavailable",
+            "ACPI": acpi_status,
+            "CPU WMI": "OK" if cpu_ohm is not None else "unavailable",
+            "CPU-LHM-WMI": "OK" if cpu_lhm_wmi is not None else "unavailable",
+            "GPU nvidia-smi": "OK" if gpu_smi is not None else "unavailable",
+            "GPU WMI": "OK" if gpu_ohm is not None else "unavailable",
+            "GPU-LHM-WMI": "OK" if gpu_lhm_wmi is not None else "unavailable",
+            "Memory WMI": "OK" if mem_wmi is not None else "unavailable",
         }
         return self._fallback_cache
 
     def read_metrics(self, config: Optional[dict] = None) -> Metrics:
         config = config or DEFAULT_CONFIG
+        self._requested_gpu = config.get("gpu_device_id")
         metrics = Metrics()
         try:
             metrics.cpu_usage = f"{psutil.cpu_percent(interval=0.15):.0f}%"
@@ -893,6 +1040,13 @@ class SensorReader:
             pass
 
         lhm = self._read_lhm_values()
+        if not self.gpu_devices:
+            devices = self._read_smi_devices()
+            self.gpu_devices = [(identity, item[0]) for identity, item in sorted(devices.items())]
+            chosen = self._requested_gpu if self._requested_gpu is not None else next(iter(sorted(devices)), None)
+            if chosen in devices:
+                lhm.update(devices[chosen][1])
+                self._selected_gpu = chosen
         fb = self._read_fallback_values(lhm, config)
 
         if lhm.get("cpu_usage") is not None:
@@ -934,38 +1088,46 @@ class SensorReader:
         if memory_freq is not None:
             metrics.memory_freq = f"{memory_freq:.0f} MHz"
         if metrics.cpu_temp == "N/A" and metrics.gpu_temp == "N/A":
-            metrics.temp_hint = "未拿到核心温度(驱动/接口受限)"
+            metrics.temp_hint = "temperatures_unavailable"
         elif metrics.cpu_temp == "N/A":
-            metrics.temp_hint = "CPU核心温度接口不可用"
+            metrics.temp_hint = "cpu_temperature_unavailable"
+        elif metrics.gpu_temp == "N/A":
+            metrics.temp_hint = "gpu_temperature_unavailable"
 
-        try:
-            now = time.time()
-            disk = psutil.disk_io_counters()
-            net = psutil.net_io_counters()
-            if self._last_disk is not None and self._last_net is not None and self._last_io_ts > 0:
-                dt = max(0.1, now - self._last_io_ts)
-                disk_bps = ((disk.read_bytes - self._last_disk.read_bytes) + (disk.write_bytes - self._last_disk.write_bytes)) / dt
-                read_bps = (disk.read_bytes - self._last_disk.read_bytes) / dt
-                write_bps = (disk.write_bytes - self._last_disk.write_bytes) / dt
-                up_bps = (net.bytes_sent - self._last_net.bytes_sent) / dt
-                down_bps = (net.bytes_recv - self._last_net.bytes_recv) / dt
-                metrics.disk_speed = f"{disk_bps / (1024.0 * 1024.0):.1f} MB/s"
-                metrics.disk_read = f"{read_bps / (1024.0 * 1024.0):.1f} MB/s"
-                metrics.disk_write = f"{write_bps / (1024.0 * 1024.0):.1f} MB/s"
-                metrics.network_speed = f"↑ {up_bps / (1024.0 * 1024.0):.1f} MB/s  ↓ {down_bps / (1024.0 * 1024.0):.1f} MB/s"
-                metrics.network_up = f"{up_bps / (1024.0 * 1024.0):.1f} MB/s"
-                metrics.network_down = f"{down_bps / (1024.0 * 1024.0):.1f} MB/s"
-            self._last_disk = disk
-            self._last_net = net
-            self._last_io_ts = now
-        except Exception:
-            pass
+        now = time.monotonic()
+        for category, getter, keys, output_keys in (
+            ("disk", lambda: psutil.disk_io_counters(perdisk=True, nowrap=False), ("read_bytes", "write_bytes"), ("disk_read", "disk_write")),
+            ("net", lambda: psutil.net_io_counters(pernic=True, nowrap=False), ("bytes_sent", "bytes_recv"), ("network_up", "network_down")),
+        ):
+            attribute = "_baseline_" + category
+            try:
+                counters = getter() or {}
+                current = {name: tuple(getattr(value, key) for key in keys) for name, value in counters.items()}
+                previous = getattr(self, attribute, None)
+                setattr(self, attribute, (now, current))
+                if not previous or not current or set(previous[1]) != set(current):
+                    continue
+                dt = now - previous[0]
+                if dt <= 0 or dt > max(10, 3 * config["refresh_interval_ms"] / 1000):
+                    continue
+                deltas = [tuple(value[i] - previous[1][name][i] for i in range(2)) for name, value in current.items()]
+                if any(delta < 0 for pair in deltas for delta in pair):
+                    continue
+                rates = [sum(pair[i] for pair in deltas) / dt / (1024 * 1024) for i in range(2)]
+                for key, value in zip(output_keys, rates):
+                    setattr(metrics, key, f"{value:.1f} MB/s")
+                if category == "disk":
+                    metrics.disk_speed = f"{sum(rates):.1f} MB/s"
+                else:
+                    metrics.network_speed = f"↑ {rates[0]:.1f} MB/s  ↓ {rates[1]:.1f} MB/s"
+            except Exception:
+                setattr(self, attribute, None)
 
         try:
             batt = psutil.sensors_battery()
             if batt is not None:
-                state = "充电中" if batt.power_plugged else "使用中"
-                metrics.battery_status = f"{int(round(batt.percent))}% ({state})"
+                metrics.battery_status = "充电中" if batt.power_plugged else "使用中"
+                metrics.battery_percent = batt.percent
         except Exception:
             pass
 
@@ -982,7 +1144,10 @@ class SensorReader:
         except Exception:
             pass
 
+        self._last_status["LHM"] = "device_read_failed" if any(not ok for ok in self.device_outcomes.values()) else "ok"
         metrics.source_status = " | ".join([f"{k}:{v}" for k, v in self._last_status.items()])
+        if self._lhm_error:
+            metrics.source_status += " | " + self._lhm_error
         return metrics
 
 
@@ -1006,6 +1171,12 @@ class FpsService:
         self._presentmon_available = False
         self._frame_ms_samples = deque(maxlen=600)
         self._generation = 0
+        self._session_identity = uuid.uuid4().hex
+        self._spawn_context = threading.local()
+        self._workers = []
+        self._stderr_workers = []
+        self._capture = CaptureStream()
+        self._capture_identity = None
 
     def configure(self, enabled: bool, target_process: str, force_restart: bool = False) -> None:
         target_process = (target_process or "").strip()
@@ -1083,15 +1254,20 @@ class FpsService:
         args = [
             str(exe),
             "--process_name",
-            self._target_process,
+            getattr(self._spawn_context, "target", self._target_process),
             "--output_stdout",
             "--no_console_stats",
             "--v1_metrics",
-            "--stop_existing_session",
+            "--session_name",
+            getattr(self._spawn_context, "session", "HardwareMonitoring-" + self._session_identity + "-" + str(self._generation)),
         ]
         try:
             self._logger.info("Starting PresentMon: %s", " ".join(args))
-            return subprocess.Popen(
+            registry = SessionRegistry(runtime_data_dir() / "fps-sessions", exe, self._logger)
+            registry.reclaim()
+            name = args[-1]
+            record = registry.register(name)
+            proc = subprocess.Popen(
                 args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1102,6 +1278,8 @@ class FpsService:
                 creationflags=0x08000000,
                 bufsize=1,
             )
+            proc._owned_session = (registry, name, record)
+            return proc
         except Exception as exc:
             self._logger.exception("Failed to start PresentMon: %s", exc)
             return None
@@ -1112,6 +1290,8 @@ class FpsService:
             self._stop_event.clear()
             self._generation += 1
             generation = self._generation
+            self._capture = CaptureStream()
+            self._capture_identity = None
             self._csv_headers = []
             self._csv_index = {}
             self._last_value_ts = 0.0
@@ -1120,6 +1300,8 @@ class FpsService:
             self._frame_ms_samples.clear()
 
         self._worker_thread = threading.Thread(target=self._run_worker, args=(generation,), daemon=True)
+        self._workers = [worker for worker in self._workers if worker.is_alive()]
+        self._workers.append(self._worker_thread)
         self._worker_thread.start()
 
     def stop(self) -> None:
@@ -1129,15 +1311,23 @@ class FpsService:
             proc = self._proc
             self._proc = None
         if proc is not None:
-            try:
-                if proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=1.2)
-                    except Exception:
-                        proc.kill()
-            except Exception:
-                pass
+            self._terminate_process(proc)
+        deadline = time.monotonic() + 1.5
+        for worker in self._workers + self._stderr_workers:
+            if worker is not threading.current_thread():
+                worker.join(max(0, deadline - time.monotonic()))
+
+    def _terminate_process(self, proc):
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=1.2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=1.2)
+        except Exception:
+            self._logger.warning("PresentMon process cleanup incomplete", exc_info=True)
 
     def close(self) -> None:
         self.stop()
@@ -1145,14 +1335,14 @@ class FpsService:
     def get_display_text(self) -> str:
         with self._lock:
             if self._enabled and self._target_process and self._presentmon_available:
-                if self._last_value_ts > 0 and (time.time() - self._last_value_ts) > 4.0:
+                if self._last_value_ts > 0 and (time.monotonic() - self._last_value_ts) > 4.0:
                     return "--"
             return self._display_text
 
     def get_low_display_text(self) -> str:
         with self._lock:
             if self._enabled and self._target_process and self._presentmon_available:
-                if self._last_value_ts > 0 and (time.time() - self._last_value_ts) > 4.0:
+                if self._last_value_ts > 0 and (time.monotonic() - self._last_value_ts) > 4.0:
                     return "--"
             return self._low_display_text
 
@@ -1160,6 +1350,10 @@ class FpsService:
         with self._lock:
             if generation != self._generation or self._stop_event.is_set():
                 return
+        with self._lock:
+            capture = self._capture
+            self._spawn_context.target = self._target_process
+            self._spawn_context.session = "HardwareMonitoring-" + self._session_identity + "-" + str(generation)
         proc = self._spawn()
         with self._lock:
             stale = generation != self._generation or self._stop_event.is_set()
@@ -1167,10 +1361,8 @@ class FpsService:
                 self._proc = proc
         if stale:
             if proc is not None:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+                self._terminate_process(proc)
+                self._finish_process(proc)
             return
         if proc is None or proc.stdout is None:
             with self._lock:
@@ -1180,20 +1372,20 @@ class FpsService:
 
         try:
             if proc.stderr is not None:
-                threading.Thread(target=self._read_stderr, args=(proc.stderr,), daemon=True).start()
+                stderr_worker = threading.Thread(target=self._read_stderr, args=(proc.stderr, generation), daemon=True)
+                self._stderr_workers = [worker for worker in self._stderr_workers if worker.is_alive()]
+                self._stderr_workers.append(stderr_worker)
+                stderr_worker.start()
             while not self._stop_event.is_set() and generation == self._generation:
                 line = proc.stdout.readline()
                 if not line:
                     break
-                self._consume_line(line.strip())
+                self._consume_line(line.strip(), generation, capture)
         except Exception:
             pass
         finally:
-            try:
-                if proc.poll() is None:
-                    proc.terminate()
-            except Exception:
-                pass
+            self._terminate_process(proc)
+            self._finish_process(proc)
             with self._lock:
                 if generation == self._generation and self._enabled and self._target_process and self._display_text not in ("不可用", "未选择", "关闭"):
                     self._display_text = "--"
@@ -1203,45 +1395,55 @@ class FpsService:
             except Exception:
                 pass
 
-    def _read_stderr(self, stderr_pipe) -> None:
+    def _finish_process(self, proc):
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None and hasattr(pipe, "close"):
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+        owned = getattr(proc, "_owned_session", None)
+        if owned:
+            registry, name, record = owned
+            registry.finish(name, record)
+
+    def _read_stderr(self, stderr_pipe, generation) -> None:
         try:
-            while not self._stop_event.is_set():
+            last_log = 0.0
+            while not self._stop_event.is_set() and generation == self._generation:
                 line = stderr_pipe.readline()
                 if not line:
                     break
-                self._logger.warning("PresentMon stderr: %s", line.strip())
+                if generation == self._generation and time.monotonic() - last_log > 10:
+                    self._logger.warning("PresentMon stderr: %s", line.strip()[:500])
+                    last_log = time.monotonic()
         except Exception:
             pass
 
-    def _consume_line(self, line: str) -> None:
-        if not line:
-            return
-        try:
-            row = next(csv.reader([line]))
-        except Exception:
-            return
-        if not row:
-            return
-        if not self._csv_headers:
-            lowered = [s.strip().lower() for s in row]
-            known_cols = {"application", "processid", "runtime", "msbetweenpresents", "fps", "avgfps"}
-            matches = sum(1 for c in lowered if c in known_cols)
-            if matches >= 2:
-                self._csv_headers = row
-                self._csv_index = {name.strip().lower(): idx for idx, name in enumerate(row)}
-                return
-        fps_value = self._extract_fps_from_row(row)
-        if fps_value is None:
-            return
-        frame_ms = self._extract_frame_ms_from_row(row)
+    def _consume_line(self, line: str, generation=None, capture=None) -> None:
         with self._lock:
-            self._display_text = str(int(round(fps_value)))
-            if frame_ms is not None and frame_ms > 0:
-                self._frame_ms_samples.append(frame_ms)
-            elif fps_value > 0:
-                self._frame_ms_samples.append(1000.0 / fps_value)
+            generation = self._generation if generation is None else generation
+            if generation != self._generation or self._stop_event.is_set():
+                return
+            capture = capture or self._capture
+        parsed = capture.consume(line)
+        if parsed is None:
+            return
+        fps, frame_ms, changed = parsed
+        with self._lock:
+            if generation != self._generation or self._stop_event.is_set() or capture is not self._capture:
+                return
+            if changed:
+                self._frame_ms_samples.clear()
+                self._last_value_ts = 0
+                self._display_text = self._low_display_text = "--"
+            self._capture_identity = capture.selected
+            if fps is None:
+                return
+            self._display_text = str(int(round(fps)))
+            self._frame_ms_samples.append(frame_ms)
             self._low_display_text = self._calc_low_1_text()
-            self._last_value_ts = time.time()
+            self._last_value_ts = time.monotonic()
 
     def _calc_low_1_text(self) -> str:
         if len(self._frame_ms_samples) < 30:
@@ -1250,9 +1452,10 @@ class FpsService:
         idx = int(len(ordered) * 0.99) - 1
         idx = max(0, min(len(ordered) - 1, idx))
         worst_1pct_ms = ordered[idx]
-        if worst_1pct_ms <= 0:
+        if not math.isfinite(worst_1pct_ms) or worst_1pct_ms <= 0:
             return "--"
-        return str(int(round(1000.0 / worst_1pct_ms)))
+        result = 1000.0 / worst_1pct_ms
+        return str(int(round(result))) if math.isfinite(result) else "--"
 
     def _extract_fps_from_row(self, row: list[str]) -> Optional[float]:
         def get_by_name(*names: str) -> Optional[str]:
@@ -1266,7 +1469,8 @@ class FpsService:
             if raw is None:
                 return None
             try:
-                return float(raw.strip())
+                value = float(raw.strip())
+                return value if math.isfinite(value) else None
             except Exception:
                 return None
 
@@ -1278,7 +1482,8 @@ class FpsService:
         ms_raw = get_by_name("msbetweenpresents", "msbetweenpresent", "msuntildisplayed")
         ms_val = to_float(ms_raw)
         if ms_val is not None and ms_val > 0:
-            return 1000.0 / ms_val
+            value = 1000.0 / ms_val
+            return value if math.isfinite(value) and value > 0 else None
         return None
 
     def _extract_frame_ms_from_row(self, row: list[str]) -> Optional[float]:
@@ -1293,7 +1498,8 @@ class FpsService:
             if raw is None:
                 return None
             try:
-                return float(raw.strip())
+                value = float(raw.strip())
+                return value if math.isfinite(value) else None
             except Exception:
                 return None
 
@@ -1302,6 +1508,33 @@ class FpsService:
         if ms_val is not None and ms_val > 0:
             return ms_val
         return None
+
+
+def configure_tray_abi():
+    pointer, uint, boolean = ctypes.c_void_p, ctypes.c_uint, ctypes.wintypes.BOOL
+    user = ctypes.windll.user32
+    signatures = {
+        "CreatePopupMenu": ([], pointer), "DestroyMenu": ([pointer], boolean),
+        "AppendMenuW": ([pointer, uint, ctypes.c_size_t, ctypes.c_wchar_p], boolean),
+        "LoadImageW": ([pointer, ctypes.c_wchar_p, uint, ctypes.c_int, ctypes.c_int, uint], pointer),
+        "LoadIconW": ([pointer, pointer], pointer), "DestroyIcon": ([pointer], boolean),
+        "GetCursorPos": ([pointer], boolean), "SetForegroundWindow": ([pointer], boolean),
+        "TrackPopupMenu": ([pointer, uint, ctypes.c_int, ctypes.c_int, ctypes.c_int, pointer, pointer], boolean),
+        "PostMessageW": ([pointer, uint, ctypes.c_size_t, ctypes.c_ssize_t], boolean),
+        "DestroyWindow": ([pointer], boolean), "PostQuitMessage": ([ctypes.c_int], None),
+        "GetMessageW": ([pointer, pointer, uint, uint], ctypes.c_int),
+        "TranslateMessage": ([pointer], boolean), "DispatchMessageW": ([pointer], ctypes.c_ssize_t),
+        "UnregisterClassW": ([ctypes.c_wchar_p, pointer], boolean),
+    }
+    for name, (arguments, result) in signatures.items():
+        function = getattr(user, name)
+        function.argtypes, function.restype = arguments, result
+    ctypes.windll.kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    ctypes.windll.kernel32.GetModuleHandleW.restype = pointer
+    ctypes.windll.kernel32.GetLastError.argtypes = []
+    ctypes.windll.kernel32.GetLastError.restype = ctypes.wintypes.DWORD
+    ctypes.windll.shell32.Shell_NotifyIconW.argtypes = [ctypes.wintypes.DWORD, pointer]
+    ctypes.windll.shell32.Shell_NotifyIconW.restype = boolean
 
 
 class TrayIconService:
@@ -1392,7 +1625,11 @@ class TrayIconService:
         if not self._nid:
             return False
         try:
-            ctypes.windll.shell32.Shell_NotifyIconW(self.NIM_ADD, ctypes.byref(self._nid))
+            if self._visible:
+                return True
+            if not ctypes.windll.shell32.Shell_NotifyIconW(self.NIM_ADD, ctypes.byref(self._nid)):
+                logging.getLogger("hardware_monitor").warning("Tray registration failed")
+                return False
             self._visible = True
             return True
         except Exception:
@@ -1417,11 +1654,13 @@ class TrayIconService:
                 pass
 
     def _thread_proc(self) -> None:
+        configure_tray_abi()
+        self._owned_icon = None
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
         lresult_t = ctypes.c_ssize_t
         hinstance = kernel32.GetModuleHandleW(None)
-        class_name = "HardwareMonitorTrayClass"
+        class_name = "HardwareMonitorTrayClass-" + str(os.getpid())
 
         class WNDCLASSW(ctypes.Structure):
             _fields_ = [
@@ -1510,14 +1749,20 @@ class TrayIconService:
         self._ready.set()
 
         msg = ctypes.wintypes.MSG()
-        while self._running.is_set() and user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) != 0:
+        while self._running.is_set() and user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) > 0:
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
 
         if self._menu:
             user32.DestroyMenu(self._menu)
+        if self._owned_icon:
+            user32.DestroyIcon(self._owned_icon)
         if hwnd:
             user32.DestroyWindow(hwnd)
+        user32.UnregisterClassW(class_name, hinstance)
+        self._hwnd = None
+        self._nid = None
+        self._visible = False
 
     def _load_icon_handle(self):
         user32 = ctypes.windll.user32
@@ -1525,7 +1770,9 @@ class TrayIconService:
         IMAGE_ICON = 1
         if self._icon_path and self._icon_path.exists():
             try:
-                return user32.LoadImageW(None, str(self._icon_path), IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
+                self._owned_icon = user32.LoadImageW(None, str(self._icon_path), IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
+                if self._owned_icon:
+                    return self._owned_icon
             except Exception:
                 pass
         return user32.LoadIconW(None, 32512)
@@ -1544,7 +1791,7 @@ class OverlayApp:
         self.config = config
         self.logger = setup_logger(runtime_data_dir())
         self.config["autostart"] = self._is_autostart_enabled()
-        self.sensor_reader = SensorReader()
+        self.sensor_runtime = SensorRuntime(SensorReader, lambda: dict(self.config), Metrics, self.logger)
         self.fps_service = FpsService(self._app_dir(), self._runtime_base_dir(), self.logger)
         self.labels: Dict[str, tk.Label] = {}
         self.last_metrics = Metrics()
@@ -1561,7 +1808,7 @@ class OverlayApp:
         self._metrics_lock = threading.Lock()
         self._latest_metrics = Metrics()
         self._metrics_updated_at = 0.0
-        self.lan_dashboard = LanDashboardService(self._dashboard_snapshot, self._dashboard_updated_at, self.logger)
+        self.lan_dashboard = LanDashboardService(self._dashboard_snapshot, self._dashboard_updated_at, self.logger, self._dashboard_payload)
         self._ui_timer_id: Optional[str] = None
 
         self._setup_window()
@@ -1596,6 +1843,7 @@ class OverlayApp:
 
     def _setup_window(self) -> None:
         self.root.title(APP_NAME)
+        self.root.protocol("WM_DELETE_WINDOW", self._close_now)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", bool(self.config["always_on_top"]))
         self.root.attributes("-alpha", float(self.config["window_opacity"]))
@@ -1756,31 +2004,38 @@ class OverlayApp:
             self.close_btn.configure(fg="#c6cfdf", bg=THEMES[self.config["theme"]]["panel"])
 
     def _start_metrics_thread(self) -> None:
-        def worker() -> None:
-            while not self._stop_event.is_set():
-                metrics = self.sensor_reader.read_metrics(self.config)
-                with self._metrics_lock:
-                    self._latest_metrics = metrics
-                    self._metrics_updated_at = time.time()
-                self._stop_event.wait(max(0.25, int(self.config["refresh_interval_ms"]) / 1000.0))
+        self.sensor_runtime.start()
 
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _dashboard_snapshot(self) -> dict:
-        with self._metrics_lock:
-            metrics = asdict(self._latest_metrics)
+    def _dashboard_payload(self) -> dict:
+        snapshot = self.sensor_runtime.snapshot()
+        metrics = {key: snapshot["metrics"][key] for key in PUBLIC_METRIC_FIELDS}
+        metrics["battery_status"] = format_metric("battery_status", Metrics(**snapshot["metrics"]), self.config.get("ui_language") == "en")
+        metrics["source_status"] = snapshot["sample_state"]
+        metrics["temp_hint"] = snapshot["error_code"]
+        if snapshot["sample_state"] not in ("ok", "degraded"):
+            metrics = {key: "--" for key in PUBLIC_METRIC_FIELDS}
+            metrics["source_status"] = snapshot["sample_state"]
         metrics["fps"] = self.fps_service.get_display_text()
         metrics["fps_low_1"] = self.fps_service.get_low_display_text()
-        return metrics
+        return {key: snapshot[key] for key in ("updated_at", "sample_state", "sample_age_ms", "sample_generation", "error_code")} | {"status": "ok", "metrics": metrics}
+
+    def _dashboard_snapshot(self) -> dict:
+        return self._dashboard_payload()["metrics"]
 
     def _dashboard_updated_at(self) -> str:
-        with self._metrics_lock:
-            updated_at = self._metrics_updated_at
-        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(updated_at)) if updated_at > 0 else ""
+        return self.sensor_runtime.snapshot()["updated_at"]
 
     def _update_metrics_loop(self) -> None:
-        with self._metrics_lock:
-            metrics = Metrics(**asdict(self._latest_metrics))
+        if self._stop_event.is_set():
+            return
+        if self._ui_timer_id is not None:
+            self.root.after_cancel(self._ui_timer_id)
+            self._ui_timer_id = None
+        snapshot = self.sensor_runtime.snapshot()
+        metrics = Metrics(**snapshot["metrics"])
+        if snapshot["sample_state"] not in ("ok", "degraded"):
+            metrics = Metrics()
+            metrics.temp_hint = snapshot["sample_state"]
         is_en = str(self.config.get("ui_language", "zh")) == "en"
         metrics.fps = self.fps_service.get_display_text()
         metrics.fps_low_1 = self.fps_service.get_low_display_text()
@@ -1792,17 +2047,11 @@ class OverlayApp:
                 val = getattr(metrics, key, "--")
                 if val in (None, "", "N/A"):
                     val = "--"
-                if is_en and key == "battery_status":
-                    val = str(val).replace("充电中", "Charging").replace("使用中", "On Battery")
-                if is_en and key in ("fps", "fps_low_1"):
-                    val = str(val).replace("关闭", "Off").replace("未选择", "Not Selected").replace("不可用", "Unavailable")
+                val = format_metric(key, metrics, is_en)
                 label.configure(text=str(val))
             except Exception:
                 label.configure(text="--")
-        hint_text = metrics.temp_hint
-        if is_en:
-            hint_text = str(hint_text).replace("CPU核心温度接口不可用", "CPU core temperature sensor unavailable")
-        self.hint_label.configure(text=hint_text)
+        self.hint_label.configure(text=status_text(metrics.temp_hint, is_en))
         self._refresh_diag_text()
         self._ui_timer_id = self.root.after(300, self._update_metrics_loop)
 
@@ -1834,35 +2083,22 @@ class OverlayApp:
     def _refresh_diag_text(self) -> None:
         if self.diag_label is None or self.diag_window is None or not self.diag_window.winfo_exists():
             return
-        admin_text = "管理员权限: 是" if self._is_admin() else "管理员权限: 否（可能影响温度读取）"
-        lines = [
-            admin_text,
-            f"CPU 占用: {self.last_metrics.cpu_usage}",
-            f"CPU 核心温度: {self.last_metrics.cpu_temp}",
-            f"CPU 频率: {self.last_metrics.cpu_freq}",
-            f"GPU 占用: {self.last_metrics.gpu_usage}",
-            f"GPU 温度: {self.last_metrics.gpu_temp}",
-            f"GPU 频率: {self.last_metrics.gpu_clock}",
-            f"显存频率: {self.last_metrics.vram_freq}",
-            f"显存占用: {self.last_metrics.gpu_memory}",
-            f"内存占用: {self.last_metrics.memory_usage}",
-            f"内存频率: {self.last_metrics.memory_freq}",
-            f"CPU 功耗: {self.last_metrics.cpu_power}",
-            f"GPU 功耗: {self.last_metrics.gpu_power}",
-            f"磁盘: {self.last_metrics.disk_speed}",
-            f"网络: {self.last_metrics.network_speed}",
-            f"网络延迟: {self.last_metrics.network_latency}",
-            f"SSD温度: {self.last_metrics.ssd_temp}",
-            f"电池: {self.last_metrics.battery_status}",
-            f"FPS: {self.last_metrics.fps}",
-            f"1% Low: {self.last_metrics.fps_low_1}",
-            f"目标进程: {self.last_metrics.target_process}",
-            "",
-            "数据源状态:",
-            self.last_metrics.source_status if self.last_metrics.source_status else "尚未采集",
-            "",
-            "提示: 右键主窗口可关闭此诊断页",
-        ]
+        en = self.config.get("ui_language") == "en"
+        self.diag_window.title("Sensor diagnostics" if en else "传感器诊断")
+        snapshot = self.sensor_runtime.snapshot()
+        lines = [("Administrator: " if en else "管理员权限：") + (("Yes" if en else "是") if self._is_admin() else ("No (sensor access may be limited)" if en else "否（传感器访问可能受限）")),
+                 ("Sampling: " if en else "采样：") + status_text(snapshot["sample_state"], en),
+                 ("Sample age (ms): " if en else "样本年龄（毫秒）：") + str(snapshot["sample_age_ms"]),
+                 ("GPU devices: " if en else "显卡设备：") + str(snapshot["gpu_devices"]),
+                 ("FPS stream: " if en else "FPS 捕获流：") + str(self.fps_service._capture_identity)]
+        for key in PUBLIC_METRIC_FIELDS:
+            if key in ("source_status", "temp_hint"):
+                continue
+            label = METRIC_LABEL_EN.get(key, key) if en else next((item[2] for item in METRIC_LAYOUT if item[1] == key), key)
+            lines.append(label + ": " + format_metric(key, self.last_metrics, en))
+        lines += [status_text(self.last_metrics.temp_hint, en),
+                  ("Error: " if en else "错误：") + status_text(snapshot["error_code"], en),
+                  ("Local diagnostic: " if en else "本地诊断：") + snapshot["metrics"]["source_status"]]
         self.diag_label.configure(text="\n".join(lines))
 
     def _toggle_settings(self, _event=None) -> None:
@@ -1908,6 +2144,7 @@ class OverlayApp:
             "show_group_titles": bool(self.config.get("show_group_titles", True)),
             "fps_enabled": bool(self.config.get("fps_enabled", False)),
             "fps_target_process": str(self.config.get("fps_target_process", "")),
+            "gpu_device_id": self.config.get("gpu_device_id"),
             "lan_dashboard_enabled": bool(self.config.get("lan_dashboard_enabled", False)),
             "lan_dashboard_port": int(self.config.get("lan_dashboard_port", 8765)),
             "log_level": str(self.config.get("log_level", "INFO")),
@@ -2170,10 +2407,9 @@ class OverlayApp:
             except Exception:
                 names = []
                 values = [""]
+            if process_var.get() and process_var.get() not in values:
+                values.append(process_var.get())
             process_combo["values"] = values
-            if process_var.get() not in values:
-                process_var.set("")
-                state["fps_target_process"] = ""
             refresh_fps_state(process_names=set(names))
 
         def refresh_fps_state(process_names=None) -> None:
@@ -2233,7 +2469,7 @@ class OverlayApp:
 
         # 重置所有设置
         def reset_all():
-            if tk.messagebox.askyesno(tr("确认", "Confirm"), tr("确定要重置所有设置吗？\n需要重启生效。", "Reset all settings?\nRestart required.")):
+            if messagebox.askyesno(tr("确认", "Confirm"), tr("确定要重置所有设置吗？\n需要重启生效。", "Reset all settings?\nRestart required.")):
                 self.config.update(DEFAULT_CONFIG.copy())
                 self._save_config()
                 self._apply_lan_dashboard_config()
@@ -2260,6 +2496,23 @@ class OverlayApp:
         tk.Label(dir_frame, text=tr("配置文件", "Config File"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10)).pack(side="left")
         tk.Button(dir_frame, text=tr("打开目录", "Open Folder"), relief="flat", bd=0, padx=12, pady=6, cursor="hand2", bg=win_bg, fg=sub_fg, font=("Segoe UI", 9), highlightthickness=0, command=open_config_dir).pack(side="right")
 
+        gpu_frame = tk.Frame(adv_card, bg=card_bg)
+        gpu_frame.pack(fill="x", padx=8, pady=8)
+        tk.Label(gpu_frame, text=tr("监控显卡", "Monitored GPU"), bg=card_bg, fg=text_fg).pack(side="left")
+        devices = self.sensor_runtime.snapshot()["gpu_devices"]
+        selected_gpu = state.get("gpu_device_id")
+        if selected_gpu is not None and selected_gpu not in [item[0] for item in devices]:
+            devices.append((selected_gpu, tr("离线设备", "Offline device")))
+        gpu_ids = [None] + [item[0] for item in devices]
+        gpu_labels = [tr("自动（按设备标识）", "Automatic (device ID)")] + [name + " [" + identity + "]" for identity, name in devices]
+        gpu_combo = ttk.Combobox(gpu_frame, values=gpu_labels, state="readonly", width=34)
+        gpu_combo.current(gpu_ids.index(selected_gpu) if selected_gpu in gpu_ids else 0)
+        gpu_combo.pack(side="right")
+        def select_gpu(_event=None):
+            state["gpu_device_id"] = gpu_ids[gpu_combo.current()]
+            apply_live(rebuild=False)
+        gpu_combo.bind("<<ComboboxSelected>>", select_gpu)
+
         # 日志级别
         log_frame = tk.Frame(adv_card, bg=card_bg)
         log_frame.pack(fill="x", padx=8, pady=8)
@@ -2273,7 +2526,7 @@ class OverlayApp:
         src_frame = tk.Frame(adv_card, bg=card_bg)
         src_frame.pack(fill="x", padx=8, pady=8)
         tk.Label(src_frame, text=tr("传感器源", "Sensor Sources"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        lhm_ok = self.sensor_reader._lhm_computer is not None
+        lhm_ok = self.sensor_runtime.snapshot()["sample_state"] == "ok"
         smi_ok = shutil.which("nvidia-smi") is not None
         src_text = f"LHM: {'OK' if lhm_ok else 'N/A'}\nnvidia-smi: {'OK' if smi_ok else 'N/A'}"
         tk.Label(src_frame, text=src_text, bg=card_bg, fg=hint_fg, font=("Consolas", 9), justify="left").pack(anchor="w", padx=(16, 0))
@@ -2327,11 +2580,13 @@ class OverlayApp:
         config_path = app_dir / "config.json"
         try:
             app_dir.mkdir(parents=True, exist_ok=True)
+            preserve_invalid_config(config_path)
             tmp_path = config_path.with_suffix(".json.tmp")
             tmp_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp_path.replace(config_path)
         except Exception as exc:
             self.logger.error("Failed to save config: %s", exc)
+            messagebox.showerror(APP_NAME, "配置未保存 / Configuration was not saved", parent=self.root)
 
     def _apply_fps_config(self, force_restart: bool = False) -> None:
         enabled = bool(self.config.get("fps_enabled", False))
@@ -2351,12 +2606,24 @@ class OverlayApp:
             self.logger.warning("LAN dashboard remains disabled because port %s is unavailable", port)
 
     def _lan_dashboard_address(self, port: int) -> str:
+        en = self.config.get("ui_language") == "en"
+        if not self.lan_dashboard.is_running:
+            return "Not running" if en else "未运行"
+        candidates = []
         try:
-            addresses = {item[4][0] for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
-            address = next((item for item in sorted(addresses) if not item.startswith("127.")), "127.0.0.1")
-        except OSError:
-            address = "127.0.0.1"
-        return f"http://{address}:{port}"
+            stats = psutil.net_if_stats()
+            for name, addresses in sorted(psutil.net_if_addrs().items()):
+                if name not in stats or not stats[name].isup:
+                    continue
+                for item in addresses:
+                    if item.family != socket.AF_INET:
+                        continue
+                    address = ipaddress.ip_address(item.address)
+                    if not (address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast):
+                        candidates.append(f"{name}: http://{address}:{self.lan_dashboard.port}")
+        except (OSError, ValueError):
+            pass
+        return ("IPv4 candidates (reachability depends on network): " if en else "IPv4 候选（能否访问取决于网络）：") + ("; ".join(candidates) or ("None" if en else "无"))
 
     def _list_process_names(self) -> list[str]:
         names = set()
@@ -2395,8 +2662,11 @@ class OverlayApp:
             shown = self.tray_service.show()
             if shown:
                 self.root.withdraw()
+            else:
+                self.root.deiconify()
+                self.hint_label.configure(text="Tray unavailable; window kept open" if self.config.get("ui_language") == "en" else "托盘不可用，窗口保持显示")
         except Exception:
-            pass
+            self.logger.exception("Tray operation failed")
 
     def _show_from_tray(self) -> None:
         try:
@@ -2452,7 +2722,11 @@ class OverlayApp:
             return False
 
     def _close_now(self) -> None:
+        if self._stop_event.is_set():
+            return
         self._stop_event.set()
+        self.sensor_runtime.stop()
+        shutdown_deadline = time.monotonic() + 3
         if self._ui_timer_id is not None:
             try:
                 self.root.after_cancel(self._ui_timer_id)
@@ -2462,12 +2736,97 @@ class OverlayApp:
             self.diag_window.destroy()
         if self.settings_window is not None and self.settings_window.winfo_exists():
             self.settings_window.destroy()
-        self.fps_service.close()
-        self.lan_dashboard.stop()
-        if self.tray_service is not None:
-            self.tray_service.close()
-        self.sensor_reader.close()
-        self.root.destroy()
+        def stop_services():
+            self.fps_service.close()
+            self.lan_dashboard.stop()
+            if self.tray_service is not None:
+                self.tray_service.close()
+        cleanup = threading.Thread(target=stop_services, name="service-shutdown", daemon=True)
+        cleanup.start()
+        def finish():
+            worker = self.sensor_runtime.thread
+            if ((worker is not None and worker.is_alive()) or cleanup.is_alive()) and time.monotonic() < shutdown_deadline:
+                self.root.after(50, finish)
+                return
+            if worker is not None and worker.is_alive():
+                self.logger.error("unclean sampler shutdown")
+            if cleanup.is_alive():
+                self.logger.error("unclean service shutdown")
+            self.root.destroy()
+        finish()
+
+
+def validate_config(raw):
+    """Normalize only known fields, without coercing unsafe truthy values."""
+    errors = []
+    if not isinstance(raw, dict):
+        return DEFAULT_CONFIG.copy(), ["root"]
+    raw = dict(raw)
+    if "refresh_interval_ms" not in raw and "update_interval_ms" in raw:
+        raw["refresh_interval_ms"] = raw["update_interval_ms"]
+    result = DEFAULT_CONFIG.copy()
+    enums = {"theme": THEMES, "display_mode": ("标准", "精简"),
+             "ui_language": ("zh", "en"), "close_action": ("tray", "exit"),
+             "log_level": ("DEBUG", "INFO", "WARNING", "ERROR")}
+    for key, default in DEFAULT_CONFIG.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        valid = True
+        if type(default) is bool:
+            valid = type(value) is bool
+        elif key == "gpu_device_id":
+            valid = value is None or isinstance(value, str)
+        elif key in enums:
+            valid = isinstance(value, str) and value in enums[key]
+        elif key == "metric_order":
+            valid = isinstance(value, list) and all(isinstance(x, str) and x in METRIC_MAP for x in value)
+            if valid:
+                value = list(dict.fromkeys(value + DEFAULT_METRIC_ORDER))
+        elif isinstance(default, (int, float)):
+            try:
+                valid = type(value) in (int, float) and math.isfinite(value)
+            except OverflowError:
+                valid = False
+            if valid:
+                if key == "refresh_interval_ms":
+                    valid = type(value) is int and 300 <= value <= 2147483647
+                elif key == "lan_dashboard_port":
+                    valid = type(value) is int and 1024 <= value <= 65535
+                elif key == "window_opacity":
+                    value = min(1.0, max(0.0, value))
+                elif key == "font_scale":
+                    value = min(1.4, max(.9, value))
+        else:
+            valid = isinstance(value, str)
+        if valid:
+            result[key] = value
+        else:
+            errors.append(key)
+    if not result["metric_order"]:
+        result["metric_order"] = list(DEFAULT_METRIC_ORDER)
+    return result, errors
+
+
+def preserve_invalid_config(path):
+    if not path.exists():
+        return
+    contents = path.read_bytes()
+    try:
+        _, errors = validate_config(json.loads(contents))
+    except (ValueError, UnicodeError):
+        errors = ["json"]
+    if errors:
+        digest = hashlib.sha256(contents).hexdigest()
+        backup = path.with_name("config.invalid-" + digest + ".json")
+        try:
+            with backup.open("xb") as output:
+                output.write(contents)
+                output.flush()
+                os.fsync(output.fileno())
+        except FileExistsError:
+            if backup.read_bytes() != contents:
+                raise OSError("Configuration backup does not match original")
 
 
 def load_config() -> dict:
@@ -2486,147 +2845,26 @@ def load_config() -> dict:
         except Exception as exc:
             _logger.warning("Failed to migrate config: %s", exc)
 
-    _has_refresh_in_file = False
-    if config_path.exists():
-        try:
-            file_config = json.loads(config_path.read_text(encoding="utf-8"))
-            _has_refresh_in_file = "refresh_interval_ms" in file_config
-            known_keys = set(DEFAULT_CONFIG.keys())
-            # Also accept legacy update_interval_ms for migration
-            known_keys.add("update_interval_ms")
-            filtered = {k: v for k, v in file_config.items() if k in known_keys}
-            config.update(filtered)
-        except Exception as exc:
-            _logger.warning("Failed to load config: %s", exc)
-
-    # Migrate legacy update_interval_ms to refresh_interval_ms
-    if "update_interval_ms" in config:
-        if not _has_refresh_in_file:
-            try:
-                config["refresh_interval_ms"] = int(config.pop("update_interval_ms"))
-            except Exception:
-                config.pop("update_interval_ms", None)
-        else:
-            config.pop("update_interval_ms", None)
-
+    if not config_path.exists():
+        return validate_config({})[0]
     try:
-        config["refresh_interval_ms"] = max(300, int(config["refresh_interval_ms"]))
-    except Exception:
-        config["refresh_interval_ms"] = DEFAULT_CONFIG["refresh_interval_ms"]
-
-    try:
-        opacity = float(config["window_opacity"])
-        config["window_opacity"] = min(1.0, max(0.0, opacity))
-    except Exception:
-        config["window_opacity"] = DEFAULT_CONFIG["window_opacity"]
-
-    try:
-        config["always_on_top"] = bool(config["always_on_top"])
-    except Exception:
-        config["always_on_top"] = DEFAULT_CONFIG["always_on_top"]
-
-    legacy_theme_map = {
-        "娣辫壊钃?": "深色蓝",
-        "娣辫壊钃�": "深色蓝",
-        "鑻规灉娴呰壊": "苹果浅色",
-        "鐭冲ⅷ鐏?": "石墨灰",
-        "鐭冲ⅷ鐏�": "石墨灰",
-    }
-    legacy_mode_map = {
-        "鏍囧噯": "标准",
-        "绮剧畝": "精简",
-    }
-    raw_theme = str(config.get("theme", "") or "")
-    raw_mode = str(config.get("display_mode", "") or "")
-    if raw_theme in legacy_theme_map:
-        config["theme"] = legacy_theme_map[raw_theme]
-    if raw_mode in legacy_mode_map:
-        config["display_mode"] = legacy_mode_map[raw_mode]
-
-    if config.get("theme") not in THEMES:
-        config["theme"] = DEFAULT_CONFIG["theme"]
-
-
-    lang = str(config.get("ui_language", DEFAULT_CONFIG["ui_language"])).strip().lower()
-    config["ui_language"] = "en" if lang == "en" else "zh"
-
-    try:
-        fs = float(config["font_scale"])
-        config["font_scale"] = min(1.4, max(0.9, fs))
-    except Exception:
-        config["font_scale"] = DEFAULT_CONFIG["font_scale"]
-
-    try:
-        config["fps_enabled"] = bool(config["fps_enabled"])
-    except Exception:
-        config["fps_enabled"] = DEFAULT_CONFIG["fps_enabled"]
-
-    try:
-        config["fps_target_process"] = str(config.get("fps_target_process", "") or "").strip()
-    except Exception:
-        config["fps_target_process"] = DEFAULT_CONFIG["fps_target_process"]
-
-    try:
-        port = int(config.get("lan_dashboard_port", DEFAULT_CONFIG["lan_dashboard_port"]))
-        config["lan_dashboard_port"] = port if 1024 <= port <= 65535 else DEFAULT_CONFIG["lan_dashboard_port"]
-    except Exception:
-        config["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
-
-    raw_order = config.get("metric_order", [])
-    if not isinstance(raw_order, list):
-        raw_order = []
-    metric_order = [str(x) for x in raw_order if isinstance(x, str) and x in METRIC_MAP]
-    for key in DEFAULT_METRIC_ORDER:
-        if key not in metric_order:
-            metric_order.append(key)
-    config["metric_order"] = metric_order
-
-    bool_keys = [
-        "minimize_to_tray",
-        "autostart",
-        "compact_mode",
-        "show_group_titles",
-        "show_cpu_usage",
-        "show_memory_usage",
-        "show_gpu_usage",
-        "show_vram_usage",
-        "show_cpu_temperature",
-        "show_gpu_temperature",
-        "show_cpu_fan",
-        "show_gpu_fan",
-        "show_cpu_power",
-        "show_gpu_power",
-        "show_cpu_freq",
-        "show_gpu_freq",
-        "show_vram_freq",
-        "show_memory_freq",
-        "show_ssd_temperature",
-        "show_network_latency",
-        "show_disk_speed",
-        "show_network_speed",
-        "show_disk_read",
-        "show_disk_write",
-        "show_net_up",
-        "show_net_down",
-        "show_battery",
-        "show_fps",
-        "show_fps_low_1",
-        "show_target_process",
-        "lan_dashboard_enabled",
-    ]
-    for key in bool_keys:
-        try:
-            config[key] = bool(config.get(key, DEFAULT_CONFIG[key]))
-        except Exception:
-            config[key] = DEFAULT_CONFIG[key]
-
-    close_action = str(config.get("close_action", DEFAULT_CONFIG["close_action"])).strip().lower()
-    config["close_action"] = "tray" if close_action == "tray" else "exit"
-
-    log_level = str(config.get("log_level", "INFO")).strip().upper()
-    config["log_level"] = log_level if log_level in ("DEBUG", "INFO", "WARNING", "ERROR") else "INFO"
-
-    return config
+        contents = config_path.read_bytes()
+        raw = json.loads(contents)
+        if isinstance(raw, dict):
+            for key, translations in {
+                "theme": {"娣辫壊钃?": "深色蓝", "娣辫壊钃�": "深色蓝", "鑻规灉娴呰壊": "苹果浅色", "鐭冲ⅷ鐏?": "石墨灰", "鐭冲ⅷ鐏�": "石墨灰"},
+                "display_mode": {"鏍囧噯": "标准", "绮剧畝": "精简"},
+            }.items():
+                value = raw.get(key)
+                if isinstance(value, str) and value in translations:
+                    raw[key] = translations[value]
+        config, errors = validate_config(raw)
+        if errors:
+            _logger.warning("Invalid config fields %s; original sha256=%s", errors, hashlib.sha256(contents).hexdigest())
+        return config
+    except (ValueError, UnicodeError, OSError) as exc:
+        _logger.warning("Failed to load config: %s", exc)
+        return validate_config({})[0]
 
 
 def enable_dpi_awareness() -> None:

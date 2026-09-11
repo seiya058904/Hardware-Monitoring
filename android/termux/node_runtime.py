@@ -3,6 +3,7 @@
 from dataclasses import asdict, fields
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import errno
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -93,6 +94,9 @@ def _link_or_copy_exclusive(source: Path, destination: Path) -> bool:
         return True
     except AttributeError:
         pass
+    except OSError as error:
+        if error.errno not in (errno.EOPNOTSUPP, errno.ENOSYS):
+            raise
 
     descriptor: int | None = None
     identity: tuple[int, int] | None = None
@@ -127,23 +131,36 @@ def _lock_operation(lock_path: Path):
     key = str(lock_path.resolve())
     with _LOCK_OPERATION_GUARD:
         thread_lock = _LOCK_OPERATION_LOCKS.setdefault(key, threading.Lock())
-    with thread_lock:
+    if not thread_lock.acquire(timeout=.5):
+        raise TimeoutError("lock guard deadline")
+    try:
         guard_path = lock_path.with_name(f".{lock_path.name}.guard")
         descriptor = os.open(guard_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             if fcntl is not None:
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                deadline = time.monotonic() + .5
+                while True:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("lock guard deadline")
+                        time.sleep(.05)
             yield
         finally:
             if fcntl is not None:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
+    finally:
+        thread_lock.release()
 
 
 class InstanceLock:
     """An exclusive lock that treats only an exact live process record as active."""
 
     def __init__(self, lock_path: Path, script_path: Path) -> None:
+        self.error_code = "instance_lock_contended"
         self._lock_path = Path(lock_path)
         self._script_path = Path(script_path).resolve()
         self._record: dict[str, object] | None = None
@@ -186,7 +203,7 @@ class InstanceLock:
             temporary_path.unlink()
             published = True
             _sync_parent_directory(self._lock_path)
-        except OSError:
+        except FileExistsError:
             return False
         finally:
             if not published:
@@ -210,6 +227,7 @@ class InstanceLock:
         except FileNotFoundError:
             return None, None
         except OSError:
+            self.error_code = "instance_lock_io_error"
             return None, b""
         return _lock_record_from_bytes(contents), contents
 
@@ -253,7 +271,7 @@ class InstanceLock:
             claimed = True
             _sync_parent_directory(self._lock_path)
             return claim_path
-        except OSError:
+        except FileExistsError:
             return None
         finally:
             if not claimed and claim_path.exists():
@@ -276,7 +294,9 @@ class InstanceLock:
                 record = self._new_record()
                 if record is None:
                     return False
-                while True:
+                for attempt in range(5):
+                    if attempt:
+                        time.sleep(.1)
                     if self._create_exclusively(record):
                         return True
                     existing, contents = self._read_lock_record()
@@ -297,7 +317,9 @@ class InstanceLock:
                     except OSError:
                         return False
         except OSError:
+            self.error_code = "instance_lock_io_error"
             return False
+        return False
 
     def release(self) -> None:
         """Remove only the exact record created by this lock instance."""

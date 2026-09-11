@@ -97,6 +97,12 @@ if [ "\${1:-}" = "-" ] && [ -n "\${VERIFY_GROUP:-}" ]; then
 fi
 if [ "\${1:-}" != "-" ] && [ "\${1##*/}" = "monitor_node.py" ]; then
     printf '%s\n' "\$*" >> "\$PYTHON_DIAGNOSTICS"
+    if [ "\${MUTATE_DIAGNOSTIC:-}" = 1 ]; then
+        printf '%s\n' 'concurrent user edit' > "\$HOME/.local/share/hardware-monitor-node/node_config.py"
+        printf '%s\n' 'new runtime state' > "\$HOME/.local/share/hardware-monitor-node/state.json"
+        printf '%s\n' 'new runtime log' >> "\$HOME/.local/share/hardware-monitor-node/logs/monitor.log"
+        exit 42
+    fi
     [ "\${FAIL_DIAGNOSTIC:-}" != 1 ] || exit 42
     exit 0
 fi
@@ -167,6 +173,52 @@ fi
 grep -Fxq 'old monitor program' "$NODE_HOME/monitor_node.py" || fail "diagnostic failure must restore the previous program"
 grep -Fxq 'old boot program' "$NODE_HOME/boot.sh" || fail "diagnostic failure must restore every previous program file"
 cmp -s "$TEMP_DIR/pre-diagnostic-config.json" "$NODE_HOME/config.json" || fail "diagnostic failure must restore the previous config"
+
+# Inject failure at every publication, including the first/middle copy and wrapper.
+for operation in cp mv; do
+    for failed_file in monitor_node.py node_config.py node_checks.py node_state.py node_runtime.py boot.sh start-hardware-monitor-node; do
+        cp() {
+            if [ "${FAIL_OPERATION:-}" = cp ] && [ "${1##*/}" = "$FAIL_FILE" ] && [[ "$1" == "$ROOT/android/termux/"* ]]; then return 1; fi
+            command cp "$@"
+        }
+        mv() {
+            local destination="${@: -1}"
+            if [ "${FAIL_OPERATION:-}" = mv ] && [ "${destination##*/}" = "$FAIL_FILE" ] && [[ "$1 $2" == *".hardware-monitor-node."* ]]; then return 1; fi
+            command mv "$@"
+        }
+        export ROOT FAIL_FILE="$failed_file" FAIL_OPERATION="$operation"
+        export -f cp mv
+        before="$(sha256sum "$NODE_HOME/monitor_node.py" "$NODE_HOME/node_config.py" "$NODE_HOME/node_checks.py" "$NODE_HOME/node_state.py" "$NODE_HOME/node_runtime.py" "$NODE_HOME/boot.sh" "$NODE_HOME/config.json" "$WRAPPER")"
+        # Wrapper is generated, so its copy source is a temporary file.
+        if [ "$operation:$failed_file" = cp:start-hardware-monitor-node ]; then
+            unset -f cp
+            cp() {
+                if [[ "$1" == *"/.start-hardware-monitor-node."* ]]; then return 1; fi
+                command cp "$@"
+            }
+            export -f cp
+        fi
+        if run_install > "$ERROR_LOG" 2>&1; then fail "injected $operation failure for $failed_file must fail install"; fi
+        unset -f cp mv
+        unset FAIL_FILE FAIL_OPERATION
+        after="$(sha256sum "$NODE_HOME/monitor_node.py" "$NODE_HOME/node_config.py" "$NODE_HOME/node_checks.py" "$NODE_HOME/node_state.py" "$NODE_HOME/node_runtime.py" "$NODE_HOME/boot.sh" "$NODE_HOME/config.json" "$WRAPPER")"
+        [ "$before" = "$after" ] || fail "failed publication must restore exact file hashes"
+    done
+done
+
+if MUTATE_DIAGNOSTIC=1 run_install > "$ERROR_LOG" 2>&1; then fail "concurrent edit fixture must fail installation"; fi
+grep -Fxq 'concurrent user edit' "$NODE_HOME/node_config.py" || fail "rollback must preserve a concurrent program edit"
+grep -Fxq 'new runtime state' "$NODE_HOME/state.json" || fail "rollback must preserve runtime state"
+grep -Fxq 'new runtime log' "$NODE_HOME/logs/monitor.log" || fail "rollback must preserve runtime logs"
+grep -Fq 'rollback conflict' "$ERROR_LOG" || fail "rollback conflict must be diagnosed"
+# Remove only the verified recovery fixture files in this fresh test directory.
+for backup in "$NODE_HOME"/.hardware-monitor-node-backup.*; do
+    [ -d "$backup" ] || continue
+    for name in monitor_node.py node_config.py node_checks.py node_state.py node_runtime.py boot.sh config.json start-hardware-monitor-node; do
+        rm -f "$backup/$name" "$backup/$name.present" "$backup/$name.expected" "$backup/$name.changed"
+    done
+    rmdir "$backup"
+done
 
 BAD_PREFIX="$TEMP_DIR/missing-prefix"
 BAD_BIN="$BAD_PREFIX/bin"

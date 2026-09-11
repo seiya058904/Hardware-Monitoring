@@ -100,3 +100,12 @@ Uninstall attempts to stop only the verified monitor process group and releases 
 ## Boundaries
 
 The node has no incoming phone port, remote-control endpoint, file access endpoint, or log-upload feature. It cannot repair the Windows dashboard, bypass Android permissions, guarantee Vivo background execution, or make a device stay online. Device-specific behavior needs an authorized on-device check.
+
+
+### Sampling-health protocol compatibility
+
+When all `sample_state`, `sample_age_ms`, `sample_generation`, and `error_code` fields are present, the node consumes the server's sampling-health decision. `ok` and `degraded` are fresh (the latter indicates partial device failure); `stale`, `unavailable`, and `stopping` fail the dashboard check. Invalid or partial new-protocol fields are protocol errors, not a reason to silently fall back. Existing notification failure/recovery thresholds still apply.
+
+For older servers only, `updated_at` retains the existing age limit and permits at most five seconds of future clock skew. A larger future offset reports `clock_skew`. New servers do not require the phone and PC wall clocks to agree.
+
+Installation journals only the program files, configuration actually replaced by the installer, and its Boot wrapper. Logs and runtime state are never rolled back. If a changed file no longer matches the transaction's published content, rollback preserves the concurrent modification and retains the backup with an explicit diagnostic. A failed intermediate copy is never treated as a successful installation.

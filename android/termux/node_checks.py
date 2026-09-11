@@ -137,13 +137,29 @@ def check_dashboard(
     if payload.get("status") != "ok":
         return result(False, "metrics_status_invalid", "metrics_status_invalid")
 
-    updated_at = _parse_updated_at(payload.get("updated_at"))
-    stale_after = max(
-        2 * config.check_interval_seconds + config.request_timeout_seconds,
-        125,
-    )
-    if updated_at is None or (now - updated_at).total_seconds() > stale_after:
-        return result(False, "metrics_stale", "metrics_stale")
+    health_keys = {"sample_state", "sample_age_ms", "sample_generation", "error_code"}
+    if health_keys.intersection(payload):
+        state = payload.get("sample_state")
+        age = payload.get("sample_age_ms")
+        generation = payload.get("sample_generation")
+        if (not health_keys.issubset(payload) or state not in ("ok", "degraded", "stale", "unavailable", "stopping")
+                or type(generation) is not int or generation < 0
+                or not isinstance(payload.get("error_code"), str)
+                or (age is not None and (type(age) is not int or age < 0))
+                or (state in ("ok", "degraded") and (age is None or generation == 0))):
+            return result(False, "sampling_health_invalid", "sampling_health_invalid")
+        if state not in ("ok", "degraded"):
+            return result(False, "metrics_" + state, "metrics_" + state)
+    else:
+        updated_at = _parse_updated_at(payload.get("updated_at"))
+        stale_after = max(2 * config.check_interval_seconds + config.request_timeout_seconds, 125)
+        if updated_at is None:
+            return result(False, "metrics_stale", "metrics_stale")
+        age = (now - updated_at).total_seconds()
+        if age < -5:
+            return result(False, "clock_skew", "clock_skew")
+        if age > stale_after:
+            return result(False, "metrics_stale", "metrics_stale")
     if not isinstance(payload.get("metrics"), dict):
         return result(False, "metrics_shape_invalid", "metrics_shape_invalid")
     return result(True, "ok")

@@ -1,5 +1,5 @@
 ﻿!define APP_NAME "Hardware Monitoring"
-!define APP_VERSION "1.0.8"
+!define APP_VERSION "1.0.9"
 !define APP_EXE "Hardware Monitoring.exe"
 !define DIST_DIR "dist\Hardware Monitoring"
 !define INSTALL_DIR "$PROGRAMFILES\${APP_NAME}"
@@ -28,14 +28,30 @@ SetCompressor /SOLID lzma
 
 Section "程序文件 (必需)" SecCore
   SectionIn RO
-  SetOutPath "$INSTDIR"
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR\payload"
   File "${DIST_DIR}\${APP_EXE}"
   File "用户须知.txt"
-  SetOutPath "$INSTDIR\_internal"
+  SetOutPath "$PLUGINSDIR\payload\_internal"
   File /r "${DIST_DIR}\_internal\*.*"
-  SetOutPath "$INSTDIR\licenses"
+  SetOutPath "$PLUGINSDIR\payload\licenses"
   File "THIRD_PARTY_NOTICES.md"
   File "third_party\licenses\*.txt"
+  SetOutPath "$PLUGINSDIR"
+  File "scripts\install-transaction.ps1"
+  install_retry:
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\install-transaction.ps1" -Mode Install -InstallRoot "$INSTDIR" -SourceRoot "$PLUGINSDIR\payload"'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" install_complete
+  DetailPrint "$1"
+  IfSilent install_cancel
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "安装未完成。请退出本安装目录的程序后重试。$\r$\n$1" IDRETRY install_retry
+  install_cancel:
+  SetErrorLevel 1
+  Abort
+  install_complete:
+  SetOutPath "$INSTDIR"
 
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayVersion" "${APP_VERSION}"
@@ -68,6 +84,21 @@ SectionEnd
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "scripts\install-transaction.ps1"
+  uninstall_retry:
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\install-transaction.ps1" -Mode Uninstall -InstallRoot "$INSTDIR"'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" uninstall_complete
+  DetailPrint "$1"
+  IfSilent uninstall_cancel
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "卸载未完成，恢复入口已保留。请退出程序后重试。$\r$\n$1" IDRETRY uninstall_retry
+  uninstall_cancel:
+  SetErrorLevel 1
+  Abort
+  uninstall_complete:
   Delete "$DESKTOP\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk"
@@ -76,10 +107,5 @@ Section "Uninstall"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "HardwareMonitorMini"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
   Delete "$INSTDIR\Uninstall.exe"
-  Delete "$INSTDIR\${APP_EXE}"
-  Delete "$INSTDIR\用户须知.txt"
-  Delete "$INSTDIR\config.json"
-  RMDir /r "$INSTDIR\licenses"
-  RMDir /r "$INSTDIR\_internal"
   RMDir "$INSTDIR"
 SectionEnd

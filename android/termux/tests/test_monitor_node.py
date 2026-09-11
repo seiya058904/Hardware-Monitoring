@@ -26,6 +26,7 @@ def result(target, success=True, category="ok"):
 
 
 class FakeLock:
+    error_code = "instance_lock_contended"
     def __init__(self, acquired=True):
         self.acquired = acquired
         self.released = False

@@ -80,7 +80,7 @@ def run_forever(config_path: Path) -> int:
     logger = configure_logging(log_path, config.log_max_bytes, config.log_backup_count)
     lock = InstanceLock(lock_path, Path(__file__))
     if not lock.acquire():
-        logger.error("instance_lock_contended")
+        logger.error(lock.error_code)
         return INSTANCE_LOCK_CONTENDED_EXIT
 
     stop_event = threading.Event()

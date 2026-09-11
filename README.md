@@ -16,13 +16,13 @@ With built-in Chinese/English language switching, Hardware Monitoring fits daily
 
 ## 下载 / Downloads
 
-当前正式版本：v1.0.8
-Current stable release: v1.0.8
+当前正式版本：v1.0.9
+Current stable release: v1.0.9
 
-- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.8
-- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.8.exe`
+- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.9
+- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.9.exe`
 
-安装包 SHA-256 / Installer SHA-256：`E709BCBFD2B19555B6F4A70EF8D4BBF7E199693C7BD7A45E4D32118E4FB28B9E`
+安装包 SHA-256 / Installer SHA-256：`1B2893D7642949009FC35F6393F45F3987BEA169F6981DF975C3D0B5869D77A2`
 
 运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
 卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
@@ -37,6 +37,17 @@ Current stable release: v1.0.8
 
 ## Android Termux 监控节点 / Android Termux Monitoring Node
 
-v1.0.8 提供可选的 Android Termux 监控节点，包含配置示例、安装与卸载脚本、启动脚本和健康检查。它适合需要从 Android 设备采集或上报监控状态的场景；仅使用 Windows 桌面悬浮监控时无需安装或配置此组件。
+v1.0.9 提供可选的 Android Termux 监控节点，包含配置示例、安装与卸载脚本、启动脚本和健康检查。它适合需要从 Android 设备采集或上报监控状态的场景；仅使用 Windows 桌面悬浮监控时无需安装或配置此组件。
 
-v1.0.8 includes an optional Android Termux monitoring node with configuration examples, install/uninstall scripts, startup scripts, and health checks. It is intended for Android-based monitoring scenarios; no setup is required for normal Windows desktop overlay use.
+v1.0.9 includes an optional Android Termux monitoring node with configuration examples, install/uninstall scripts, startup scripts, and health checks. It is intended for Android-based monitoring scenarios; no setup is required for normal Windows desktop overlay use.
+
+
+## 运行时可靠性与兼容性 / Runtime reliability
+
+高级设置中的“监控显卡”保留一个设备的完整指标组。选择保存的是不透明设备 ID，名称只用于展示；设备离线时保留选择。未选择时按设备 ID 确定默认设备。LHM 与 nvidia-smi 的身份不能验证一致时，不跨设备补齐缺失字段。
+
+桌面与 LAN API 共用采样健康状态。`/api/metrics` 保留 `status`、`updated_at`、`metrics`，新增 `sample_state`、`sample_age_ms`、`sample_generation`、`error_code`；`status=ok` 表示响应有效，采样是否可用由 `sample_state` 表达。`ok/degraded` 为新鲜数据（后者有部分故障），`stale/unavailable/stopping` 不代表实时指标。`sample_generation` 在本次运行内随有效样本递增；`sample_age_ms` 使用服务器单调时间。详细本地诊断不通过 API 公开。新版网页及 Termux 不依赖设备间墙钟同步，旧协议才检查时间戳与有限时钟偏差。
+
+LAN 默认关闭。启用后最多接受 16 个并发连接，每个连接从接受起有 5 秒总期限；关闭会撤销并回收已接入连接。多网卡地址以 IPv4 候选列表显示，不保证任意手机均可访问。采样停止推进时桌面显示过期；退出最多等待 3 秒，无法取消的 native 调用可能记录 `unclean sampler shutdown`，此时不再从其他线程释放传感器。
+
+错误类型的配置不会启用 LAN。对语法或字段类型损坏的配置，首次保存前在配置目录创建按内容摘要命名的 `config.invalid-*.json` 原文备份；备份失败则拒绝覆盖。Windows 安装器使用 `managed-files.json` 管理自身文件，升级/卸载遇到本安装目录程序占用会失败并允许重试，不终止其他 PresentMon。升级失败保留必要恢复材料，不删除用户数据。没有清单的旧安装需要先用新版安装器修复后再按清单卸载。
