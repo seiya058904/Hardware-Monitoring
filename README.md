@@ -16,20 +16,22 @@ With built-in Chinese/English language switching, Hardware Monitoring fits daily
 
 ## 下载 / Downloads
 
-当前正式版本：v1.0.9
-Current stable release: v1.0.9
+当前正式版本：v1.0.10
+Current stable release: v1.0.10
 
-- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.9
-- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.9.exe`
+- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.10
+- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.10.exe`
 
-安装包 SHA-256 / Installer SHA-256：`1B2893D7642949009FC35F6393F45F3987BEA169F6981DF975C3D0B5869D77A2`
+安装包 SHA-256 / Installer SHA-256：`17D30A6B5DA1D65F2EEDE7BC4DB1DD51FDA16B0CBE162C36ED2138411E1B6AF6`
 
-运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
+运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。设置窗口采用“保存 / 取消”事务语义：主题、透明度、文字大小、监控项等改动先在窗口上实时预览，只有点击“保存”才写入配置并应用 FPS / 局域网 / 开机自启动等系统级设置；点击“取消”或关闭设置窗口会完整还原。高级设置中的“打开数据目录”直达上述配置目录。悬浮窗位置会被记忆，并在下次启动时自动拉回可见屏幕范围；透明度存在 35% 的下限，避免窗口被调到完全不可见。主窗口标题栏提供采样状态指示：绿色表示实时，黄色表示部分传感器不可用，灰色表示数据过期或暂无数据。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
 卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
 
 ## 局域网仪表盘 / LAN dashboard
 
 在“高级设置”中主动启用“局域网仪表盘”后，手机可在同一 Wi-Fi 下访问设置中显示的地址（默认端口 `8765`）。页面每秒刷新一次，仅提供 `GET /`、`GET /api/metrics` 和 `GET /healthz`；不含远程控制、文件访问或公网/防火墙自动配置。关闭该开关或退出程序会停止服务并释放端口。Windows 防火墙提示时仅允许专用网络。
+
+页面首屏突出 CPU、GPU、内存、GPU 温度、FPS 与 1% Low 六个核心指标，其余数据按系统 / 显卡 / 性能 / I/O 分组展示；支持中英文切换与深色 / 浅色主题（保存在浏览器本地）。页面严格跟随采样健康状态：数据过期或断开后不再把旧数字当作实时值显示。
 
 <img width="475" height="902" alt="image" src="https://github.com/user-attachments/assets/8b3a7b37-8b3b-4df3-8617-d46968ff386f" />
 
@@ -37,9 +39,9 @@ Current stable release: v1.0.9
 
 ## Android Termux 监控节点 / Android Termux Monitoring Node
 
-v1.0.9 提供可选的 Android Termux 监控节点，包含配置示例、安装与卸载脚本、启动脚本和健康检查。它适合需要从 Android 设备采集或上报监控状态的场景；仅使用 Windows 桌面悬浮监控时无需安装或配置此组件。
+v1.0.10 提供可选的 Android Termux 监控节点，包含配置示例、安装与卸载脚本、启动脚本和健康检查。它适合需要从 Android 设备采集或上报监控状态的场景；仅使用 Windows 桌面悬浮监控时无需安装或配置此组件。
 
-v1.0.9 includes an optional Android Termux monitoring node with configuration examples, install/uninstall scripts, startup scripts, and health checks. It is intended for Android-based monitoring scenarios; no setup is required for normal Windows desktop overlay use.
+v1.0.10 includes an optional Android Termux monitoring node with configuration examples, install/uninstall scripts, startup scripts, and health checks. It is intended for Android-based monitoring scenarios; no setup is required for normal Windows desktop overlay use.
 
 
 ## 运行时可靠性与兼容性 / Runtime reliability

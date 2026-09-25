@@ -34,7 +34,7 @@ powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1
 - Use `python -m py_compile app.py` as the minimum syntax check after Python changes.
 - Run the relevant `unittest` suite for FPS, sensor, or LAN-dashboard behavior. UI, tray, packaging, or Windows-path changes also need a manual Windows run of `python app.py` or the packaged EXE.
 - Termux scripts are Bash-based; run their matching files under `android/termux/tests/` only in a compatible Bash/Termux environment.
-- There is no repository CI configuration. Do not infer deployment or release automation.
+- `.github/workflows/ci.yml` runs py_compile plus the unittest suite on a Windows runner. It is verification only; release/build automation is intentionally not wired to CI.
 
 ## Coding and Data Rules
 

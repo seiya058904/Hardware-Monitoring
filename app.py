@@ -120,15 +120,60 @@ DEFAULT_CONFIG = {
     "autostart": False,
     "close_action": "exit",
     "log_level": "INFO",
+    "window_x": None,
+    "window_y": None,
 }
 
+# Semantic theme tokens. The legacy keys (panel/sub/hint) are kept as aliases so
+# existing callers keep working; new UI should prefer the semantic names.
 THEMES = {
-    "深色蓝": {"bg": "#0f1115", "panel": "#151b28", "border": "#2b3550", "text": "#f5f7fa", "sub": "#cfd6e6", "hint": "#8190ac", "accent": "#4f8cff"},
-    "苹果浅色": {"bg": "#f5f7fb", "panel": "#ffffff", "border": "#d5dcea", "text": "#1f2937", "sub": "#475569", "hint": "#64748b", "accent": "#2f7cff"},
-    "石墨灰": {"bg": "#171717", "panel": "#242424", "border": "#3a3a3a", "text": "#f1f5f9", "sub": "#d4d4d8", "hint": "#a1a1aa", "accent": "#6ea8fe"},
-    "炫彩红": {"bg": "#1a0a0a", "panel": "#2a1010", "border": "#4a2020", "text": "#fff0f0", "sub": "#e8c0c0", "hint": "#a87070", "accent": "#ff4040"},
-    "极光绿": {"bg": "#0a1a0f", "panel": "#102a18", "border": "#204a30", "text": "#f0fff5", "sub": "#c0e8d0", "hint": "#70a880", "accent": "#40ff80"},
+    "深色蓝": {
+        "bg": "#0f1115", "surface": "#151b28", "surface_alt": "#1c2436",
+        "border": "#2b3550", "border_hover": "#40507e",
+        "text": "#f5f7fa", "text_secondary": "#cfd6e6", "text_muted": "#8190ac",
+        "accent": "#4f8cff", "accent_hover": "#6fa3ff", "on_accent": "#ffffff",
+        "danger": "#ff5d5d", "control_hover": "#1e2841",
+        "status_ok": "#3ecf7a", "status_degraded": "#e8c268", "status_stale": "#8a94ab",
+        "panel": "#151b28", "sub": "#cfd6e6", "hint": "#8190ac",
+    },
+    "苹果浅色": {
+        "bg": "#f5f7fb", "surface": "#ffffff", "surface_alt": "#eef2f8",
+        "border": "#d5dcea", "border_hover": "#b9c6de",
+        "text": "#1f2937", "text_secondary": "#475569", "text_muted": "#64748b",
+        "accent": "#2f7cff", "accent_hover": "#1f66e0", "on_accent": "#ffffff",
+        "danger": "#dc2626", "control_hover": "#e6ecf6",
+        "status_ok": "#16a34a", "status_degraded": "#b45309", "status_stale": "#64748b",
+        "panel": "#ffffff", "sub": "#475569", "hint": "#64748b",
+    },
+    "石墨灰": {
+        "bg": "#171717", "surface": "#242424", "surface_alt": "#2d2d2d",
+        "border": "#3a3a3a", "border_hover": "#555555",
+        "text": "#f1f5f9", "text_secondary": "#d4d4d8", "text_muted": "#a1a1aa",
+        "accent": "#6ea8fe", "accent_hover": "#8dbcff", "on_accent": "#ffffff",
+        "danger": "#f87171", "control_hover": "#303030",
+        "status_ok": "#4ade80", "status_degraded": "#fbbf24", "status_stale": "#a1a1aa",
+        "panel": "#242424", "sub": "#d4d4d8", "hint": "#a1a1aa",
+    },
+    "炫彩红": {
+        "bg": "#1a0a0a", "surface": "#2a1010", "surface_alt": "#341717",
+        "border": "#4a2020", "border_hover": "#6b3030",
+        "text": "#fff0f0", "text_secondary": "#e8c0c0", "text_muted": "#a87070",
+        "accent": "#ff4040", "accent_hover": "#ff6b6b", "on_accent": "#ffffff",
+        "danger": "#ff6b6b", "control_hover": "#3a1a1a",
+        "status_ok": "#4ade80", "status_degraded": "#fbbf24", "status_stale": "#a87070",
+        "panel": "#2a1010", "sub": "#e8c0c0", "hint": "#a87070",
+    },
+    "极光绿": {
+        "bg": "#0a1a0f", "surface": "#102a18", "surface_alt": "#16331f",
+        "border": "#204a30", "border_hover": "#2e6b45",
+        "text": "#f0fff5", "text_secondary": "#c0e8d0", "text_muted": "#70a880",
+        "accent": "#40ff80", "accent_hover": "#6bffa0", "on_accent": "#08331a",
+        "danger": "#ff6b6b", "control_hover": "#1a3a26",
+        "status_ok": "#4ade80", "status_degraded": "#fbbf24", "status_stale": "#70a880",
+        "panel": "#102a18", "sub": "#c0e8d0", "hint": "#70a880",
+    },
 }
+MIN_WINDOW_OPACITY = 0.35
 THEME_EN_LABEL = {
     "深色蓝": "Deep Blue",
     "苹果浅色": "Light",
@@ -205,6 +250,45 @@ GROUP_LABEL_EN = {
     "系统状态": "System Status",
 }
 
+# Settings keys that only shape the overlay preview and may be applied in memory
+# while the dialog is open. Everything else (FPS, LAN, autostart, log level,
+# window behaviors with side effects) commits only on Save.
+PREVIEW_KEYS = frozenset(
+    ["theme", "ui_language", "font_scale", "window_opacity", "compact_mode", "show_group_titles",
+     "refresh_interval_ms", "metric_order", "window_x", "window_y"]
+    + [key for key in DEFAULT_CONFIG if key.startswith("show_")]
+)
+
+
+def clamp_window_position(x, y, width, height, bounds):
+    """Keep a remembered window position reachable on the current monitors."""
+    left, top, right, bottom = bounds
+    if right <= left or bottom <= top:
+        return x, y
+    margin = 48
+    span_x, span_y = right - left, bottom - top
+    # Fully inside when it fits; otherwise keep at least `margin` px visible.
+    min_x = left if width <= span_x else left - width + margin
+    max_x = right - width if width <= span_x else right - margin
+    min_y = top if height <= span_y else top - height + margin
+    max_y = bottom - height if height <= span_y else bottom - margin
+    nx = min(max(int(x), min_x), max_x)
+    ny = min(max(int(y), min_y), max_y)
+    return int(nx), int(ny)
+
+
+def virtual_screen_bounds():
+    """Bounding box of every attached monitor in virtual-screen coordinates."""
+    try:
+        user32 = ctypes.windll.user32
+        left, top = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+        width, height = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
+        if width > 0 and height > 0:
+            return left, top, left + width, top + height
+    except Exception:
+        pass
+    return 0, 0, 0, 0
+
 
 def status_text(code, en=False):
     translations = {
@@ -272,7 +356,30 @@ class _DashboardHTTPServer(DashboardHTTPServer):
 class LanDashboardService:
     """Small read-only HTTP server for a LAN dashboard."""
 
-    _PAGE = """<!doctype html><html lang=zh-CN><meta name=viewport content="width=device-width,initial-scale=1"><title>Hardware Monitoring</title><style>body{margin:0;background:#0c1018;color:#e8eef8;font:17px system-ui,sans-serif}main{max-width:760px;margin:auto;padding:16px}.status{color:#8ed0ff}.bad{color:#ff8f8f}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.card{background:#151d2b;border:1px solid #29364d;border-radius:9px;padding:12px}.k{color:#aebbd0;font-size:14px}.v{font-size:21px;margin-top:5px;word-break:break-word}@media(max-width:380px){body{font-size:16px}.v{font-size:19px}}</style><main><h2>Hardware Monitoring</h2><div id=s class=status>连接中…</div><p id=u>最后更新：--</p><div class=grid id=g></div><script>const fields=[['cpu_usage','CPU 使用率'],['cpu_temp','CPU 温度'],['cpu_freq','CPU 频率'],['cpu_power','CPU 功耗'],['gpu_usage','GPU 使用率'],['gpu_temp','GPU 温度'],['gpu_clock','GPU 频率'],['gpu_power','GPU 功耗'],['memory_usage','内存'],['gpu_memory','显存'],['disk_speed','磁盘活动'],['network_up','网络上传'],['network_down','网络下载'],['fps','FPS'],['fps_low_1','1% Low'],['source_status','采样状态']];const g=document.querySelector('#g');g.innerHTML=fields.map(x=>`<div class=card><div class=k>${x[1]}</div><div class=v id=${x[0]}>--</div></div>`).join('');function sampleHealth(d){const keys=['sample_state','sample_age_ms','sample_generation','error_code'];if(keys.some(k=>k in d)){const state=d.sample_state,age=d.sample_age_ms;if(!keys.every(k=>k in d)||!['ok','degraded','stale','unavailable','stopping'].includes(state)||!Number.isInteger(d.sample_generation)||d.sample_generation<0||typeof d.error_code!=='string'||!(age===null||(Number.isInteger(age)&&age>=0))||(['ok','degraded'].includes(state)&&(age===null||d.sample_generation===0)))return 'invalid';return state}let stamp=Date.parse(d.updated_at),age=Date.now()-stamp;if(!Number.isFinite(stamp))return 'invalid';if(age < -5000)return 'clock_skew';return age>5000?'stale':'ok'}async function tick(){try{let r=await fetch('/api/metrics',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw 0;let d=await r.json(),m=d.metrics;if(d.status!=='ok'||!m||typeof m!=='object'||Array.isArray(m))throw 0;let state=sampleHealth(d),good=['ok','degraded'].includes(state);fields.forEach(x=>document.getElementById(x[0]).textContent=good?(m[x[0]]??'--'):'--');document.querySelector('#u').textContent='最后更新：'+(d.updated_at||'--');const labels={ok:'电脑运行中',degraded:'部分设备不可用',stale:'数据已过期',unavailable:'尚无可用数据',stopping:'正在停止',clock_skew:'时钟偏差 / Clock skew',invalid:'数据协议异常'};document.querySelector('#s').textContent=labels[state];document.querySelector('#s').className=state==='ok'?'status':'bad'}catch(e){document.querySelector('#s').textContent='连接中断 / 数据已过期';document.querySelector('#s').className='bad'}finally{setTimeout(tick,1000)}}tick();</script></main>"""
+    _PAGE = """<!doctype html><html lang=zh-CN data-theme=dark><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Hardware Monitoring</title><style>*{box-sizing:border-box}:root{--bg:#0b0f17;--card:#141b28;--line:#24304a;--tx:#e8eef8;--dim:#93a4bf;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--accent:#5b9dff}:root[data-theme=light]{--bg:#f2f5fa;--card:#ffffff;--line:#dbe3ef;--tx:#1f2937;--dim:#5b6b82;--ok:#16a34a;--warn:#b45309;--bad:#dc2626;--accent:#2563eb}html,body{margin:0}body{background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}header{display:flex;align-items:center;justify-content:space-between;gap:8px;max-width:860px;margin:0 auto;padding:14px 16px 2px}.brand{font-size:17px;font-weight:650;letter-spacing:.2px}.tools{display:flex;gap:8px}.tool{background:var(--card);border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:5px 11px;font-size:13px;cursor:pointer;line-height:1.3;white-space:nowrap;flex:none}.tool:hover{color:var(--tx)}main{max-width:860px;margin:0 auto;padding:6px 16px 28px}.state{display:flex;align-items:center;gap:8px;padding:10px 2px 12px;font-size:14px;color:var(--dim)}#dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}.state.ok #dot{background:var(--ok)}.state.warn #dot{background:var(--warn)}.state.bad #dot{background:var(--bad)}.state.ok #stateText{color:var(--tx)}.state.bad #stateText{color:var(--bad)}.age{margin-left:auto;font-size:12.5px;color:var(--dim);font-variant-numeric:tabular-nums}.hero{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 13px;min-width:0}.card .k{font-size:12.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.card .v{font-size:19px;margin-top:6px;font-variant-numeric:tabular-nums;word-break:break-word}.hero .v{font-size:23px;font-weight:600}.card.small .v{font-size:16px}.card.dim .v{color:var(--dim);opacity:.8}.group{margin-top:18px}.group h2{font-size:12.5px;color:var(--dim);font-weight:650;margin:0 0 8px;letter-spacing:.5px;text-transform:uppercase}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}@media(max-width:480px){.hero{grid-template-columns:repeat(2,1fr)}.hero .v{font-size:21px}body{font-size:15px}}@media(max-width:340px){.hero{grid-template-columns:1fr 1fr;gap:8px}.card{padding:10px}}</style></head><body><header><div class=brand>Hardware Monitoring</div><div class=tools><button id=langBtn class=tool type=button>EN</button><button id=themeBtn class=tool type=button>&#9788;</button></div></header><main><div id=state class=state><i id=dot></i><span id=stateText>...</span><span id=age class=age></span></div><section class=hero id=hero></section><div id=groups></div></main><script>
+const HERO=[['cpu_usage','CPU','CPU'],['gpu_usage','GPU','GPU'],['memory_usage','\u5185\u5b58','RAM'],['gpu_temp','GPU \u6e29\u5ea6','GPU Temp'],['fps','FPS','FPS'],['fps_low_1','1% Low','1% Low']];
+const GROUPS=[
+ {title:['\u7cfb\u7edf','System'],keys:[['cpu_temp','CPU \u6e29\u5ea6','CPU Temp'],['cpu_freq','CPU \u9891\u7387','CPU Clock'],['cpu_power','CPU \u529f\u8017','CPU Power']]},
+ {title:['\u663e\u5361','GPU'],keys:[['gpu_memory','\u663e\u5b58','VRAM'],['gpu_clock','GPU \u9891\u7387','GPU Clock'],['gpu_power','GPU \u529f\u8017','GPU Power']]},
+ {title:['\u6027\u80fd','Performance'],keys:[['target_process','\u76ee\u6807\u8fdb\u7a0b','Target Process']]},
+ {title:['\u8f93\u5165 / \u8f93\u51fa','I/O'],keys:[['disk_speed','\u78c1\u76d8','Disk'],['network_up','\u7f51\u7edc\u4e0a\u4f20','Upload'],['network_down','\u7f51\u7edc\u4e0b\u8f7d','Download'],['network_latency','\u7f51\u7edc\u5ef6\u8fdf','Latency']]},
+ {title:['\u5176\u4ed6','Other'],keys:[['ssd_temp','SSD \u6e29\u5ea6','SSD Temp'],['battery_status','\u7535\u6c60','Battery']]}];
+const L={
+ zh:{states:{ok:'\u7535\u8111\u8fd0\u884c\u4e2d',degraded:'\u90e8\u5206\u8bbe\u5907\u4e0d\u53ef\u7528',stale:'\u6570\u636e\u5df2\u8fc7\u671f',unavailable:'\u5c1a\u65e0\u53ef\u7528\u6570\u636e',stopping:'\u6b63\u5728\u505c\u6b62',clock_skew:'\u65f6\u949f\u504f\u5dee',invalid:'\u6570\u636e\u534f\u8bae\u5f02\u5e38',offline:'\u8fde\u63a5\u4e2d\u65ad'},fresh:'\u521a\u521a\u66f4\u65b0',last:'\u6700\u540e\u66f4\u65b0',connecting:'\u8fde\u63a5\u4e2d\u2026'},
+ en:{states:{ok:'PC running',degraded:'Some devices unavailable',stale:'Data stale',unavailable:'Data unavailable',stopping:'Stopping',clock_skew:'Clock skew',invalid:'Protocol error',offline:'Disconnected'},fresh:'Updated just now',last:'Last update',connecting:'Connecting\u2026'}};
+const ALL_KEYS=(function(){const seen=[],add=function(k){if(seen.indexOf(k)<0)seen.push(k)};HERO.forEach(function(k){add(k[0])});GROUPS.forEach(function(g){g.keys.forEach(function(k){add(k[0])})});return seen})();
+const heroEl=document.querySelector('#hero'),groupsEl=document.querySelector('#groups'),stateEl=document.querySelector('#state'),stateText=document.querySelector('#stateText'),ageEl=document.querySelector('#age');
+let lang=null,theme=null;
+function heroCard(k){const c=document.createElement('div');c.className='card';c.id='c-'+k[0];c.innerHTML='<div class=k></div><div class=v>--</div>';return c}
+function build(){heroEl.innerHTML='';groupsEl.innerHTML='';HERO.forEach(k=>heroEl.appendChild(heroCard(k)));GROUPS.forEach(g=>{const s=document.createElement('section');s.className='group';const h=document.createElement('h2');s.appendChild(h);const grid=document.createElement('div');grid.className='grid';g.keys.forEach(k=>{const c=document.createElement('div');c.className='card small';c.id='c-'+k[0];if(k[0]==='network_latency'){c.title='Ping 8.8.8.8'}c.innerHTML='<div class=k></div><div class=v>--</div>';grid.appendChild(c)});s.appendChild(grid);groupsEl.appendChild(s)});applyLang()}
+function applyLang(){const t=L[lang];document.documentElement.lang=lang==='en'?'en':'zh-CN';document.querySelector('#langBtn').textContent=lang==='en'?'\u4e2d\u6587':'EN';HERO.forEach(k=>{const c=document.getElementById('c-'+k[0]);c.querySelector('.k').textContent=lang==='en'?k[2]:k[1]});const heads=groupsEl.querySelectorAll('.group h2');GROUPS.forEach((g,i)=>{heads[i].textContent=lang==='en'?g.title[1]:g.title[0]});const ks=[].concat(...GROUPS.map(g=>g.keys));ks.forEach(k=>{const c=document.getElementById('c-'+k[0]);if(c){c.querySelector('.k').textContent=lang==='en'?k[2]:k[1]}})}
+function applyTheme(v){theme=v;document.documentElement.dataset.theme=v;document.querySelector('#themeBtn').innerHTML=v==='dark'?'&#9788;':'&#9790;';try{localStorage.setItem('hwmon-lan-theme',v)}catch(e){}}
+function sampleHealth(d){const keys=['sample_state','sample_age_ms','sample_generation','error_code'];if(keys.some(k=>k in d)){const state=d.sample_state,age=d.sample_age_ms;if(!keys.every(k=>k in d)||!['ok','degraded','stale','unavailable','stopping'].includes(state)||!Number.isInteger(d.sample_generation)||d.sample_generation<0||typeof d.error_code!=='string'||!(age===null||(Number.isInteger(age)&&age>=0))||(['ok','degraded'].includes(state)&&(age===null||d.sample_generation===0)))return 'invalid';return state}let stamp=Date.parse(d.updated_at),age=Date.now()-stamp;if(!Number.isFinite(stamp))return 'invalid';if(age<-5000)return 'clock_skew';return age>5000?'stale':'ok'}
+function renderValues(metrics){ALL_KEYS.forEach(key=>{const c=document.getElementById('c-'+key);if(!c)return;const v=c.querySelector('.v');const good=['ok','degraded'].includes(current);const val=good?(metrics[key]??'--'):'--';v.textContent=val;c.classList.toggle('dim',val==='--')})}
+let current='unavailable';
+async function tick(){try{const r=await fetch('/api/metrics',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw 0;const d=await r.json(),m=d.metrics;if(d.status!=='ok'||!m||typeof m!=='object'||Array.isArray(m))throw 0;current=sampleHealth(d);const good=['ok','degraded'].includes(current);const t=L[lang];stateText.textContent=t.states[current]||current;stateEl.className='state '+(current==='ok'?'ok':current==='degraded'?'warn':'bad');if(good){const age=d.sample_age_ms;ageEl.textContent=(age!==null&&age<5000)?t.fresh:t.last+' '+(d.updated_at||'--').slice(11,19)}else{ageEl.textContent=''}renderValues(m)}catch(e){current='offline';const t=L[lang];stateText.textContent=t.states.offline;stateEl.className='state bad';ageEl.textContent='';renderValues({})}finally{setTimeout(tick,1000)}}
+(function init(){try{lang=localStorage.getItem('hwmon-lan-lang')}catch(e){}if(lang!=='zh'&&lang!=='en'){lang=(navigator.language||'').toLowerCase().indexOf('zh')===0?'zh':'en'}try{theme=localStorage.getItem('hwmon-lan-theme')}catch(e){}if(theme!=='dark'&&theme!=='light'){theme=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'}applyTheme(theme);document.querySelector('#themeBtn').addEventListener('click',()=>applyTheme(theme==='dark'?'light':'dark'));document.querySelector('#langBtn').addEventListener('click',()=>{lang=lang==='en'?'zh':'en';try{localStorage.setItem('hwmon-lan-lang',lang)}catch(e){}applyLang()});build();tick()})();
+</script></body></html>"""
 
     def __init__(self, snapshot_provider, updated_at_provider, logger: Optional[logging.Logger] = None, payload_provider=None) -> None:
         self._payload_provider = payload_provider
@@ -1555,6 +1662,7 @@ class TrayIconService:
     MF_STRING = 0x0000
     ID_SHOW = 1001
     ID_EXIT = 1002
+    ID_SETTINGS = 1003
 
     class WNDCLASSW(ctypes.Structure):
         _fields_ = [
@@ -1592,11 +1700,12 @@ class TrayIconService:
             ("hBalloonIcon", ctypes.c_void_p),
         ]
 
-    def __init__(self, app_title: str, icon_path: Optional[Path], on_show, on_exit) -> None:
+    def __init__(self, app_title: str, icon_path: Optional[Path], on_show, on_exit, on_settings=None) -> None:
         self._app_title = app_title
         self._icon_path = icon_path
         self._on_show = on_show
         self._on_exit = on_exit
+        self._on_settings = on_settings
         self._enabled = False
         self._visible = False
         self._thread: Optional[threading.Thread] = None
@@ -1710,6 +1819,8 @@ class TrayIconService:
                 cmd = int(wparam & 0xFFFF)
                 if cmd == self.ID_SHOW:
                     self._on_show()
+                elif cmd == self.ID_SETTINGS and self._on_settings is not None:
+                    self._on_settings()
                 elif cmd == self.ID_EXIT:
                     self._on_exit()
                 return 0
@@ -1735,6 +1846,8 @@ class TrayIconService:
         self._hwnd = hwnd
         self._menu = user32.CreatePopupMenu()
         user32.AppendMenuW(self._menu, self.MF_STRING, self.ID_SHOW, "显示窗口")
+        if self._on_settings is not None:
+            user32.AppendMenuW(self._menu, self.MF_STRING, self.ID_SETTINGS, "设置")
         user32.AppendMenuW(self._menu, self.MF_STRING, self.ID_EXIT, "退出")
 
         nid = TrayIconService.NOTIFYICONDATAW()
@@ -1794,7 +1907,17 @@ class OverlayApp:
         self.sensor_runtime = SensorRuntime(SensorReader, lambda: dict(self.config), Metrics, self.logger)
         self.fps_service = FpsService(self._app_dir(), self._runtime_base_dir(), self.logger)
         self.labels: Dict[str, tk.Label] = {}
+        self.bars: Dict[str, tk.Canvas] = {}
         self.last_metrics = Metrics()
+        self._active_theme = THEMES[config["theme"]]
+        self._render_signature = None
+        self._label_render: Dict[str, tuple] = {}
+        self._bar_pct: Dict[str, int] = {}
+        self._last_hint = None
+        self._status_view = None
+        self._last_sample_state = None
+        self._settings_original: Optional[dict] = None
+        self._settings_working: Optional[dict] = None
         self.diag_window: Optional[tk.Toplevel] = None
         self.diag_label: Optional[tk.Label] = None
         self.settings_window: Optional[tk.Toplevel] = None
@@ -1843,11 +1966,19 @@ class OverlayApp:
 
     def _setup_window(self) -> None:
         self.root.title(APP_NAME)
-        self.root.protocol("WM_DELETE_WINDOW", self._close_now)
+        # Every user-visible close path (custom button, WM_DELETE_WINDOW, tray
+        # fallback) must honor close_action the same way.
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close_clicked)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", bool(self.config["always_on_top"]))
         self.root.attributes("-alpha", float(self.config["window_opacity"]))
-        self.root.geometry("340x330+80+80")
+        width, height = 340, 330
+        pos_x, pos_y = self.config.get("window_x"), self.config.get("window_y")
+        if type(pos_x) is int and type(pos_y) is int:
+            pos_x, pos_y = clamp_window_position(pos_x, pos_y, width, height, virtual_screen_bounds())
+        else:
+            pos_x, pos_y = 80, 80
+        self.root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
         self.root.minsize(320, 220)
         self.root.configure(bg=THEMES[self.config["theme"]]["bg"])
         icon_path = self._resolve_icon_path()
@@ -1857,12 +1988,32 @@ class OverlayApp:
             except Exception:
                 pass
 
+    def _monitor_workarea(self, x: int, y: int):
+        """Work area of the monitor containing the given point, if available."""
+        try:
+            user32 = ctypes.windll.user32
+            point = ctypes.wintypes.POINT(max(0, int(x)), max(0, int(y)))
+            monitor = user32.MonitorFromPoint(point, 1)  # MONITOR_DEFAULTTONEAREST
+            info = ctypes.wintypes.MONITORINFO()
+            info.cbSize = ctypes.sizeof(info)
+            if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                return info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom
+        except Exception:
+            pass
+        return None
+
     def _build_ui(self) -> None:
-        theme = THEMES[self.config["theme"]]
+        theme = THEMES.get(self.config["theme"], THEMES["深色蓝"])
+        self._active_theme = theme
         scale = float(self.config["font_scale"])
+        dpi = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
         compact = bool(self.config.get("compact_mode", False))
         show_groups = bool(self.config.get("show_group_titles", True))
         is_en = str(self.config.get("ui_language", "zh")) == "en"
+        self._render_signature = None
+        self.labels = {}
+        self.bars = {}
+        self._label_render = {}
 
         def ui_text(value: str) -> str:
             if not is_en:
@@ -1874,25 +2025,84 @@ class OverlayApp:
         self.container = tk.Frame(self.root, bg=theme["bg"], bd=0, highlightthickness=1, highlightbackground=theme["border"])
         self.container.pack(fill="both", expand=True)
 
-        self.header = tk.Frame(self.container, bg=theme["panel"], height=32)
+        header_h = int(34 * scale * dpi) if scale > 1.05 else int(34 * dpi)
+        self.header = tk.Frame(self.container, bg=theme["surface"], height=header_h)
         self.header.pack(fill="x")
+        self.header.pack_propagate(False)
 
-        self.title = tk.Label(self.header, text=APP_NAME, fg=theme["text"], bg=theme["panel"], font=("Microsoft YaHei UI", int(11 * scale), "bold"), anchor="w", padx=10)
+        self.title = tk.Label(self.header, text=APP_NAME, fg=theme["text"], bg=theme["surface"], font=("Microsoft YaHei UI", int(11 * scale), "bold"), anchor="w", padx=10)
         self.title.pack(side="left", fill="y")
         self.title.bind("<Button-3>", self._toggle_diagnostics)
 
-        self.settings_btn = tk.Label(self.header, text="⚙", fg="#c6cfdf", bg=theme["panel"], font=("Segoe UI", int(11 * scale), "bold"), width=3, cursor="hand2")
+        self.status_dot = tk.Canvas(self.header, width=int(12 * dpi), height=int(12 * dpi), bg=theme["surface"], highlightthickness=0)
+        self.status_dot.pack(side="left", fill="y", padx=(0, 0))
+        self.status_text = tk.Label(self.header, text="", fg=theme["text_muted"], bg=theme["surface"], font=("Microsoft YaHei UI", int(8 * scale)), anchor="w")
+        self.status_text.pack(side="left", fill="y", padx=(1, 6))
+        self._status_view = None
+
+        button_fg = theme["text_secondary"]
+        self.settings_btn = tk.Label(self.header, text="⚙", fg=button_fg, bg=theme["surface"], font=("Segoe UI", int(11 * scale), "bold"), width=3, cursor="hand2")
         self.settings_btn.pack(side="right", fill="y")
 
-        self.min_btn = tk.Label(self.header, text="—", fg="#c6cfdf", bg=theme["panel"], font=("Segoe UI", int(11 * scale), "bold"), width=3, cursor="hand2")
+        self.min_btn = tk.Label(self.header, text="—", fg=button_fg, bg=theme["surface"], font=("Segoe UI", int(11 * scale), "bold"), width=3, cursor="hand2")
         self.min_btn.pack(side="right", fill="y")
 
-        self.close_btn = tk.Label(self.header, text="✕", fg="#c6cfdf", bg=theme["panel"], font=("Segoe UI", int(11 * scale), "bold"), width=3, cursor="hand2")
+        self.close_btn = tk.Label(self.header, text="✕", fg=button_fg, bg=theme["surface"], font=("Segoe UI", int(11 * scale), "bold"), width=3, cursor="hand2")
         self.close_btn.pack(side="right", fill="y")
 
         self.body = tk.Frame(self.container, bg=theme["bg"])
-        self.body.pack(fill="both", expand=True, padx=10, pady=8)
+        self.body.pack(fill="both", expand=True, padx=10, pady=(6 if compact else 8, 7 if compact else 8))
 
+        # Try normal spacing first; if the content cannot fit the monitor work
+        # area, rebuild once with tight spacing before clamping the height.
+        available_h = None
+        area = self._monitor_workarea(self.root.winfo_x(), self.root.winfo_y())
+        if area is not None:
+            available_h = area[3] - area[1] - 24
+        needed_h = 0
+        for tight in (False, True):
+            for child in self.body.winfo_children():
+                child.destroy()
+            self.labels.clear()
+            self.bars.clear()
+            self._label_render.clear()
+            needed_h = self._build_rows(theme, scale, dpi, compact or tight, show_groups, is_en, ui_text, tight)
+            if available_h is None or needed_h <= available_h:
+                break
+
+        self.hint_label = tk.Label(self.body, text="", fg=theme["text_muted"], bg=theme["bg"], font=("Microsoft YaHei UI", int(9 * scale)), anchor="w")
+        self.hint_label.pack(fill="x", pady=(4, 0))
+        self._last_hint = None
+
+        self.root.update_idletasks()
+        needed_w = self.container.winfo_reqwidth() + 2
+        final_h = needed_h
+        if area is not None:
+            final_h = min(needed_h, area[3] - area[1] - 24)
+            final_w = min(needed_w, area[2] - area[0] - 24)
+            final_w = max(320, final_w)
+        else:
+            final_w = max(320, needed_w)
+        self.root.geometry(f"{max(320, final_w)}x{max(220, final_h)}+{self.root.winfo_x()}+{self.root.winfo_y()}")
+
+        # Render the last known values immediately so a rebuild never flashes "--".
+        self._render_metrics(self.last_metrics, is_en, force=True)
+        self._update_status_indicator(self.last_state_hint(), is_en)
+        self._update_usage_bars(self.last_metrics)
+
+    def last_state_hint(self) -> str:
+        state = getattr(self, "_last_sample_state", None)
+        if state is None:
+            snapshot_state = ""
+            try:
+                snapshot_state = self.sensor_runtime.snapshot()["sample_state"]
+            except Exception:
+                pass
+            return snapshot_state or "unavailable"
+        return state
+
+    def _build_rows(self, theme, scale, dpi, compact, show_groups, is_en, ui_text, tight) -> int:
+        """Build the metric rows; returns the required container height."""
         visible_rows = []
         order_keys = list(self.config.get("metric_order", []))
         for key in DEFAULT_METRIC_ORDER:
@@ -1910,6 +2120,9 @@ class OverlayApp:
         if not visible_rows:
             visible_rows = [("系统", "cpu_usage", "CPU")]
 
+        group_gap = (2, 1) if tight else ((3, 1) if compact else (4, 1))
+        row_gap = 0 if tight else (0 if compact else 1)
+        bar_gap = 0 if tight else 1
         last_group = None
         for group, key, text in visible_rows:
             display_group = GROUP_LABEL_EN.get(group, group) if is_en else group
@@ -1918,20 +2131,20 @@ class OverlayApp:
                 g = tk.Label(
                     self.body,
                     text=display_group,
-                    fg=theme["hint"],
+                    fg=theme["text_muted"],
                     bg=theme["bg"],
                     font=("Microsoft YaHei UI", int((8 if compact else 9) * scale), "bold"),
                     anchor="w",
                 )
-                g.pack(fill="x", pady=((4 if last_group else 0), 1))
+                g.pack(fill="x", pady=group_gap if last_group else (0, 1))
                 last_group = group
 
             row = tk.Frame(self.body, bg=theme["bg"])
-            row.pack(fill="x", pady=(0 if compact else 1))
+            row.pack(fill="x", pady=(0, row_gap))
             left = tk.Label(
                 row,
                 text=display_text,
-                fg=theme["sub"],
+                fg=theme["text_secondary"],
                 bg=theme["bg"],
                 font=("Microsoft YaHei UI", int((10 if compact else 11) * scale)),
                 anchor="w",
@@ -1943,38 +2156,40 @@ class OverlayApp:
                 text=ui_text(initial_text),
                 fg=theme["text"],
                 bg=theme["bg"],
-                font=("Segoe UI Semibold", int((10 if compact else 11) * scale)),
+                font=("Consolas", int((10 if compact else 11) * scale)),
                 anchor="e",
             )
             right.pack(side="right")
             self.labels[key] = right
 
-        self.hint_label = tk.Label(self.body, text="", fg=theme["hint"], bg=theme["bg"], font=("Microsoft YaHei UI", int(9 * scale)), anchor="w")
-        self.hint_label.pack(fill="x", pady=(5, 0))
+            if key in ("cpu_usage", "gpu_usage"):
+                bar = tk.Canvas(self.body, height=max(2, int(2 * dpi)), bg=theme["control_hover"], highlightthickness=0, bd=0)
+                bar.pack(fill="x", pady=(bar_gap, 0))
+                bar.bind("<Configure>", lambda _event, canvas=bar, metric=key: self._draw_bar(canvas, metric))
+                self.bars[key] = bar
 
         self.root.update_idletasks()
-        needed_h = self.container.winfo_reqheight() + 2
-        needed_w = self.container.winfo_reqwidth() + 2
-        self.root.geometry(f"{max(320, needed_w)}x{max(220, needed_h)}+{self.root.winfo_x()}+{self.root.winfo_y()}")
+        return self.container.winfo_reqheight() + 2
 
     def _bind_events(self) -> None:
         self.close_btn.bind("<Button-1>", lambda _: self._on_close_clicked())
         self.close_btn.bind("<Enter>", lambda _: self._set_close_hover(True))
         self.close_btn.bind("<Leave>", lambda _: self._set_close_hover(False))
 
-        self.min_btn.bind("<Button-1>", lambda _: self._hide_to_tray())
-        self.min_btn.bind("<Enter>", lambda _: self.min_btn.configure(fg="#8bd3ff"))
-        self.min_btn.bind("<Leave>", lambda _: self.min_btn.configure(fg="#c6cfdf"))
+        self.min_btn.bind("<Button-1>", lambda _: self._minimize_clicked())
+        self.min_btn.bind("<Enter>", lambda _: self.min_btn.configure(fg=self._active_theme["text"]))
+        self.min_btn.bind("<Leave>", lambda _: self.min_btn.configure(fg=self._active_theme["text_secondary"]))
 
         self.settings_btn.bind("<Button-1>", self._toggle_settings)
-        self.settings_btn.bind("<Enter>", lambda _: self.settings_btn.configure(fg="#8bd3ff"))
-        self.settings_btn.bind("<Leave>", lambda _: self.settings_btn.configure(fg="#c6cfdf"))
+        self.settings_btn.bind("<Enter>", lambda _: self.settings_btn.configure(fg=self._active_theme["text"]))
+        self.settings_btn.bind("<Leave>", lambda _: self.settings_btn.configure(fg=self._active_theme["text_secondary"]))
 
         self.root.bind("<Button-3>", self._toggle_diagnostics)
 
     def _make_draggable(self, widget) -> None:
         widget.bind("<ButtonPress-1>", self._on_drag_start)
         widget.bind("<B1-Motion>", self._on_drag_move)
+        widget.bind("<ButtonRelease-1>", self._on_drag_end)
 
     def _bind_drag_recursive(self, widget) -> None:
         if widget not in (self.close_btn, self.settings_btn, self.min_btn):
@@ -1997,11 +2212,30 @@ class OverlayApp:
         self._drag_start_x = event.x_root
         self._drag_start_y = event.y_root
 
+    def _on_drag_end(self, _event) -> None:
+        self._persist_window_position()
+
+    def _persist_window_position(self) -> None:
+        x, y = self.root.winfo_x(), self.root.winfo_y()
+        if getattr(self, "_settings_original", None) is not None:
+            # A settings transaction is open: let the position ride along with
+            # it instead of writing preview values to disk.
+            if self._settings_working is not None:
+                self._settings_working["window_x"] = x
+                self._settings_working["window_y"] = y
+            return
+        if self.config.get("window_x") == x and self.config.get("window_y") == y:
+            return
+        self.config["window_x"] = x
+        self.config["window_y"] = y
+        self._save_config()
+
     def _set_close_hover(self, is_hover: bool) -> None:
+        theme = self._active_theme
         if is_hover:
-            self.close_btn.configure(fg="#ffffff", bg="#ff4d4f")
+            self.close_btn.configure(fg=theme["on_accent"], bg=theme["danger"])
         else:
-            self.close_btn.configure(fg="#c6cfdf", bg=THEMES[self.config["theme"]]["panel"])
+            self.close_btn.configure(fg=theme["text_secondary"], bg=theme["surface"])
 
     def _start_metrics_thread(self) -> None:
         self.sensor_runtime.start()
@@ -2025,6 +2259,63 @@ class OverlayApp:
     def _dashboard_updated_at(self) -> str:
         return self.sensor_runtime.snapshot()["updated_at"]
 
+    def _render_metrics(self, metrics, is_en, force=False) -> None:
+        theme = self._active_theme
+        for key, label in self.labels.items():
+            text = format_metric(key, metrics, is_en)
+            fg = theme["text_muted"] if text == "--" else theme["text"]
+            previous = None if force else self._label_render.get(key)
+            if previous != (text, fg):
+                label.configure(text=text, fg=fg)
+                self._label_render[key] = (text, fg)
+        hint = status_text(metrics.temp_hint, is_en)
+        if force or self._last_hint != hint:
+            self.hint_label.configure(text=hint)
+            self._last_hint = hint
+
+    STATUS_SHORT = {
+        "ok": ("实时", "Live"), "degraded": ("部分不可用", "Degraded"),
+        "stale": ("已过期", "Stale"), "unavailable": ("无数据", "No data"),
+        "stopping": ("停止中", "Stopping"), "not_sampled": ("启动中", "Starting"),
+    }
+
+    def _update_status_indicator(self, state: str, is_en: bool) -> None:
+        theme = self._active_theme
+        color = theme["status_ok"] if state == "ok" else theme["status_degraded"] if state == "degraded" else theme["status_stale"]
+        text = self.STATUS_SHORT.get(state, (state, state))[int(is_en)]
+        view = (color, text, theme["surface"])
+        if self._status_view == view:
+            return
+        self._status_view = view
+        dpi = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
+        self.status_dot.delete("all")
+        inset = max(2, int(2 * dpi))
+        size = max(4, int(6 * dpi))
+        self.status_dot.create_oval(inset, inset, inset + size, inset + size, fill=color, outline="")
+        self.status_text.configure(text=text, fg=theme["text_muted"] if state == "ok" else color)
+
+    def _update_usage_bars(self, metrics) -> None:
+        for key in ("cpu_usage", "gpu_usage"):
+            canvas = self.bars.get(key)
+            if canvas is None:
+                continue
+            raw = str(getattr(metrics, key, "--")).strip().rstrip("%").strip()
+            try:
+                pct = int(float(raw))
+            except ValueError:
+                pct = 0
+            pct = max(0, min(100, pct))
+            if self._bar_pct.get(key) != pct:
+                self._bar_pct[key] = pct
+                self._draw_bar(canvas, key)
+
+    def _draw_bar(self, canvas, key) -> None:
+        canvas.delete("fill")
+        pct = self._bar_pct.get(key, 0)
+        width = int(canvas.winfo_width())
+        if pct > 0 and width > 1:
+            canvas.create_rectangle(0, 0, max(2, int(width * pct / 100)), int(canvas.winfo_height()), fill=self._active_theme["accent"], outline="", tags="fill")
+
     def _update_metrics_loop(self) -> None:
         if self._stop_event.is_set():
             return
@@ -2033,25 +2324,25 @@ class OverlayApp:
             self._ui_timer_id = None
         snapshot = self.sensor_runtime.snapshot()
         metrics = Metrics(**snapshot["metrics"])
-        if snapshot["sample_state"] not in ("ok", "degraded"):
+        state = snapshot["sample_state"]
+        if state not in ("ok", "degraded"):
             metrics = Metrics()
-            metrics.temp_hint = snapshot["sample_state"]
+            metrics.temp_hint = state
         is_en = str(self.config.get("ui_language", "zh")) == "en"
         metrics.fps = self.fps_service.get_display_text()
         metrics.fps_low_1 = self.fps_service.get_low_display_text()
         target_name = str(self.config.get("fps_target_process", "") or "").strip()
         metrics.target_process = target_name if target_name else "--"
         self.last_metrics = metrics
-        for key, label in self.labels.items():
-            try:
-                val = getattr(metrics, key, "--")
-                if val in (None, "", "N/A"):
-                    val = "--"
-                val = format_metric(key, metrics, is_en)
-                label.configure(text=str(val))
-            except Exception:
-                label.configure(text="--")
-        self.hint_label.configure(text=status_text(metrics.temp_hint, is_en))
+        self._last_sample_state = state
+        # Widgets only need touching when the sample generation, FPS text,
+        # freshness state, or language actually changed.
+        signature = (snapshot["sample_generation"], state, snapshot["error_code"], metrics.fps, metrics.fps_low_1, target_name, is_en)
+        if signature != self._render_signature:
+            self._render_signature = signature
+            self._render_metrics(metrics, is_en)
+            self._update_status_indicator(state, is_en)
+            self._update_usage_bars(metrics)
         self._refresh_diag_text()
         self._ui_timer_id = self.root.after(300, self._update_metrics_loop)
 
@@ -2069,14 +2360,15 @@ class OverlayApp:
             self.diag_label = None
             return
 
+        theme = self._active_theme
         self.diag_window = tk.Toplevel(self.root)
-        self.diag_window.title("温度诊断")
+        self.diag_window.title("传感器诊断")
         self.diag_window.attributes("-topmost", True)
         self.diag_window.geometry("+430+80")
-        self.diag_window.configure(bg="#0f1115")
+        self.diag_window.configure(bg=theme["bg"])
         self.diag_window.resizable(False, False)
 
-        self.diag_label = tk.Label(self.diag_window, text="诊断中...", fg="#d8deea", bg="#0f1115", justify="left", anchor="nw", font=("Microsoft YaHei UI", 10), padx=10, pady=10)
+        self.diag_label = tk.Label(self.diag_window, text="...", fg=theme["text_secondary"], bg=theme["bg"], justify="left", anchor="nw", font=("Microsoft YaHei UI", 10), padx=12, pady=10)
         self.diag_label.pack(fill="both", expand=True)
         self._refresh_diag_text()
 
@@ -2084,128 +2376,172 @@ class OverlayApp:
         if self.diag_label is None or self.diag_window is None or not self.diag_window.winfo_exists():
             return
         en = self.config.get("ui_language") == "en"
-        self.diag_window.title("Sensor diagnostics" if en else "传感器诊断")
+        theme = self._active_theme
+
+        def section(title):
+            return "\n" + ("─" * 30) + "\n" + title + "\n"
+
         snapshot = self.sensor_runtime.snapshot()
-        lines = [("Administrator: " if en else "管理员权限：") + (("Yes" if en else "是") if self._is_admin() else ("No (sensor access may be limited)" if en else "否（传感器访问可能受限）")),
-                 ("Sampling: " if en else "采样：") + status_text(snapshot["sample_state"], en),
-                 ("Sample age (ms): " if en else "样本年龄（毫秒）：") + str(snapshot["sample_age_ms"]),
-                 ("GPU devices: " if en else "显卡设备：") + str(snapshot["gpu_devices"]),
-                 ("FPS stream: " if en else "FPS 捕获流：") + str(self.fps_service._capture_identity)]
+        state = snapshot["sample_state"]
+        lines = []
+        if en:
+            lines.append("Sampling")
+            lines.append(f"State: {status_text(state, True)}   Age: {snapshot['sample_age_ms']} ms   Generation: {snapshot['sample_generation']}")
+            lines.append("Administrator: " + ("Yes" if self._is_admin() else "No (sensor access may be limited)"))
+            lines.append(section("Sensor sources"))
+            lines.append(f"FPS stream: {self.fps_service._capture_identity}")
+            lines.append(section("GPU devices"))
+            lines.append(str(snapshot["gpu_devices"]))
+            lines.append(section("Current metrics"))
+        else:
+            lines.append("采样状态")
+            lines.append(f"状态：{status_text(state, False)}   样本年龄：{snapshot['sample_age_ms']} ms   第 {snapshot['sample_generation']} 代")
+            lines.append("管理员权限：" + ("是" if self._is_admin() else "否（传感器访问可能受限）"))
+            lines.append(section("传感器源"))
+            lines.append(f"FPS 捕获流：{self.fps_service._capture_identity}")
+            lines.append(section("显卡设备"))
+            lines.append(str(snapshot["gpu_devices"]))
+            lines.append(section("当前指标"))
         for key in PUBLIC_METRIC_FIELDS:
             if key in ("source_status", "temp_hint"):
                 continue
             label = METRIC_LABEL_EN.get(key, key) if en else next((item[2] for item in METRIC_LAYOUT if item[1] == key), key)
-            lines.append(label + ": " + format_metric(key, self.last_metrics, en))
-        lines += [status_text(self.last_metrics.temp_hint, en),
-                  ("Error: " if en else "错误：") + status_text(snapshot["error_code"], en),
-                  ("Local diagnostic: " if en else "本地诊断：") + snapshot["metrics"]["source_status"]]
-        self.diag_label.configure(text="\n".join(lines))
+            lines.append(f"{label}: {format_metric(key, self.last_metrics, en)}")
+        lines.append(section("Diagnostics" if en else "诊断"))
+        lines.append(status_text(self.last_metrics.temp_hint, en))
+        lines.append(("Error: " if en else "错误：") + status_text(snapshot["error_code"], en))
+        lines.append(("Local detail: " if en else "本地详情：") + snapshot["metrics"]["source_status"])
+        self.diag_window.title("Sensor diagnostics" if en else "传感器诊断")
+        self.diag_label.configure(text="\n".join(lines), fg=theme["text_secondary"])
 
     def _toggle_settings(self, _event=None) -> None:
         if self.settings_window is not None and self.settings_window.winfo_exists():
-            self.settings_window.destroy()
-            self.settings_window = None
+            # Toggling the gear while the dialog is open counts as Cancel: the
+            # pending transaction is dropped instead of silently kept.
+            self._cancel_settings()
             return
+        self._settings_original = dict(self.config)
+        self._settings_working = None
+        self._open_settings_dialog()
+
+    def _close_settings_dialog(self) -> None:
+        self._settings_original = None
+        self._settings_working = None
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.destroy()
+        self.settings_window = None
+
+    def _cancel_settings(self) -> None:
+        original = self._settings_original
+        if original is None:
+            self._close_settings_dialog()
+            return
+        self.config.clear()
+        self.config.update(original)
+        self._rebuild_ui_fast()
+        pos_x, pos_y = original.get("window_x"), original.get("window_y")
+        if type(pos_x) is int and type(pos_y) is int:
+            try:
+                self.root.geometry(f"+{pos_x}+{pos_y}")
+            except Exception:
+                pass
+        self._close_settings_dialog()
+
+    def _open_settings_dialog(self) -> None:
+        if self._settings_working is None:
+            self._settings_working = {key: (list(value) if isinstance(value, list) else value) for key, value in self.config.items()}
+        working = self._settings_working
         try:
             self.settings_window = tk.Toplevel(self.root)
         except Exception:
             self.logger.exception("Create settings window failed")
             return
-        current_en = str(self.config.get("ui_language", "zh")) == "en"
-        self.settings_window.title("Settings" if current_en else "设置")
-        self.settings_window.attributes("-topmost", True)
-        self.settings_window.update_idletasks()
-        win_w, win_h = 760, 640
-        try:
-            pos_x = self.root.winfo_x() + (self.root.winfo_width() - win_w) // 2
-            pos_y = self.root.winfo_y() + (self.root.winfo_height() - win_h) // 2
-        except Exception:
-            pos_x, pos_y = 360, 120
-        self.settings_window.geometry(f"{win_w}x{win_h}+{max(0, pos_x)}+{max(0, pos_y)}")
-        self.settings_window.resizable(False, False)
+        current_en = str(working.get("ui_language", "zh")) == "en"
 
-        frame = tk.Frame(self.settings_window, bg="#151b28", padx=14, pady=12)
-        frame.pack(fill="both", expand=True)
-
-        card = tk.Frame(frame, bg="#151b28", highlightthickness=1, highlightbackground="#2b3550")
-        card.pack(fill="both", expand=True)
-
-
-        state = {
-            "theme": self.config["theme"],
-            "ui_language": str(self.config.get("ui_language", "zh")),
-            "refresh_interval_ms": int(self.config.get("refresh_interval_ms", 1000)),
-            "window_opacity": float(self.config["window_opacity"]),
-            "always_on_top": bool(self.config["always_on_top"]),
-            "minimize_to_tray": bool(self.config.get("minimize_to_tray", True)),
-            "autostart": bool(self.config.get("autostart", False)),
-            "close_action": str(self.config.get("close_action", "exit")),
-            "compact_mode": bool(self.config.get("compact_mode", False)),
-            "show_group_titles": bool(self.config.get("show_group_titles", True)),
-            "fps_enabled": bool(self.config.get("fps_enabled", False)),
-            "fps_target_process": str(self.config.get("fps_target_process", "")),
-            "gpu_device_id": self.config.get("gpu_device_id"),
-            "lan_dashboard_enabled": bool(self.config.get("lan_dashboard_enabled", False)),
-            "lan_dashboard_port": int(self.config.get("lan_dashboard_port", 8765)),
-            "log_level": str(self.config.get("log_level", "INFO")),
-            "show_cpu_usage": bool(self.config.get("show_cpu_usage", True)),
-            "show_memory_usage": bool(self.config.get("show_memory_usage", True)),
-            "show_gpu_usage": bool(self.config.get("show_gpu_usage", True)),
-            "show_vram_usage": bool(self.config.get("show_vram_usage", True)),
-            "show_cpu_temperature": bool(self.config.get("show_cpu_temperature", True)),
-            "show_gpu_temperature": bool(self.config.get("show_gpu_temperature", True)),
-            "show_ssd_temperature": bool(self.config.get("show_ssd_temperature", False)),
-            "show_cpu_fan": bool(self.config.get("show_cpu_fan", False)),
-            "show_gpu_fan": bool(self.config.get("show_gpu_fan", False)),
-            "show_cpu_power": bool(self.config.get("show_cpu_power", False)),
-            "show_gpu_power": bool(self.config.get("show_gpu_power", False)),
-            "show_cpu_freq": bool(self.config.get("show_cpu_freq", True)),
-            "show_gpu_freq": bool(self.config.get("show_gpu_freq", True)),
-            "show_vram_freq": bool(self.config.get("show_vram_freq", False)),
-            "show_memory_freq": bool(self.config.get("show_memory_freq", False)),
-            "show_disk_speed": bool(self.config.get("show_disk_speed", True)),
-            "show_disk_read": bool(self.config.get("show_disk_read", False)),
-            "show_disk_write": bool(self.config.get("show_disk_write", False)),
-            "show_network_speed": bool(self.config.get("show_network_speed", True)),
-            "show_network_latency": bool(self.config.get("show_network_latency", False)),
-            "show_net_up": bool(self.config.get("show_net_up", False)),
-            "show_net_down": bool(self.config.get("show_net_down", False)),
-            "show_battery": bool(self.config.get("show_battery", False)),
-            "show_fps": bool(self.config.get("show_fps", True)),
-            "show_fps_low_1": bool(self.config.get("show_fps_low_1", True)),
-            "show_target_process": bool(self.config.get("show_target_process", True)),
-            "metric_order": list(self.config.get("metric_order", [])),
-        }
-        lang_is_en = str(state.get("ui_language", "zh")) == "en"
-        # Keep settings page high-contrast and stable across Windows themes.
-        card_bg = "#ffffff"
-        win_bg = "#f5f7fb"
-        border = "#d5dcea"
-        text_fg = "#0f172a"
-        sub_fg = "#334155"
-        hint_fg = "#64748b"
-        accent = "#2563eb"
         def tr(zh: str, en: str) -> str:
-            return en if lang_is_en else zh
+            return en if current_en else zh
 
-        def apply_live(rebuild: bool = True, apply_fps: bool = False, force_fps_restart: bool = False) -> None:
-            self.config.update(state)
-            self._save_config()
-            self.root.attributes("-topmost", bool(self.config["always_on_top"]))
-            self.root.attributes("-alpha", float(self.config["window_opacity"]))
-            if apply_fps:
-                self._apply_fps_config(force_restart=force_fps_restart)
-            if rebuild:
-                self._rebuild_ui_fast()
+        # The dialog follows the (previewed) overlay theme instead of a fixed
+        # light palette, so both windows always read as one product.
+        theme = THEMES.get(working.get("theme"), THEMES["深色蓝"])
+        win_bg = theme["bg"]
+        card_bg = theme["surface"]
+        row_bg = theme["surface_alt"]
+        border = theme["border"]
+        text_fg = theme["text"]
+        sub_fg = theme["text_secondary"]
+        hint_fg = theme["text_muted"]
+        accent = theme["accent"]
+        on_accent = theme["on_accent"]
+        danger = theme["danger"]
+        control_bg = theme["control_hover"]
+        dpi = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
+        px = lambda value: max(1, int(round(value * dpi)))
 
+        def preview(rebuild: bool = True) -> None:
+            # Preview only shapes the overlay in memory; config.json is written
+            # exactly once, when Save is pressed.
+            self.config.update({key: working[key] for key in PREVIEW_KEYS if key in working})
+            if not rebuild:
+                self.root.attributes("-alpha", float(working["window_opacity"]))
+                return
+            self._rebuild_ui_fast()
+
+        def apply_and_reopen(rebuild: bool = True) -> None:
+            preview(rebuild=rebuild)
+            if self.settings_window is not None and self.settings_window.winfo_exists():
+                self.settings_window.destroy()
+            self._open_settings_dialog()
+
+        self.settings_window.update_idletasks()
+        screen_w = self.settings_window.winfo_screenwidth()
+        screen_h = self.settings_window.winfo_screenheight()
+        # Scale the dialog with DPI so tab labels and rows keep room on
+        # 125-200% scaling instead of being clipped into a fixed 780px frame.
+        win_w = max(560, min(int(780 * dpi), int(screen_w * 0.94)))
+        win_h = max(430, min(int(660 * dpi), int(screen_h * 0.88)))
+        # Center on the monitor the overlay lives on; the overlay itself is far
+        # too small to center a wide dialog on.
+        area = self._monitor_workarea(self.root.winfo_x(), self.root.winfo_y()) or (0, 0, screen_w, screen_h)
+        pos_x = area[0] + max(0, ((area[2] - area[0]) - win_w) // 2)
+        pos_y = area[1] + max(0, ((area[3] - area[1]) - win_h) // 2)
+        self.settings_window.geometry(f"{win_w}x{win_h}+{pos_x}+{pos_y}")
+        self.settings_window.minsize(int(min(560 * dpi, win_w)), int(min(430 * dpi, win_h)))
+        self.settings_window.resizable(True, True)
+
+        style = ttk.Style(self.settings_window)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure("Settings.TNotebook", background=card_bg, bordercolor=border, lightcolor=border, darkcolor=border, tabmargins=(0, 0, 0, 0))
+        style.configure("Settings.TNotebook.Tab", background=card_bg, foreground=sub_fg, bordercolor=border,
+                        lightcolor=border, darkcolor=border, padding=(px(14), px(8)))
+        style.map("Settings.TNotebook.Tab",
+                  background=[("selected", row_bg)], foreground=[("selected", text_fg)],
+                  bordercolor=[("selected", border)], lightcolor=[("selected", row_bg)], darkcolor=[("selected", border)],
+                  padding=[("selected", (px(14), px(9)))])
+        style.configure("Settings.TCombobox", fieldbackground=row_bg, background=row_bg, foreground=text_fg,
+                        arrowcolor=sub_fg, bordercolor=border, lightcolor=row_bg, darkcolor=row_bg)
+        style.map("Settings.TCombobox", fieldbackground=[("readonly", row_bg)], foreground=[("readonly", text_fg)])
+        style.configure("Settings.Vertical.TScrollbar", background=row_bg, troughcolor=win_bg,
+                        bordercolor=win_bg, arrowcolor=sub_fg, lightcolor=row_bg, darkcolor=row_bg)
+        self.settings_window.option_add("*TCombobox*Listbox*Background", row_bg)
+        self.settings_window.option_add("*TCombobox*Listbox*Foreground", text_fg)
+        self.settings_window.option_add("*TCombobox*Listbox*selectBackground", accent)
+        self.settings_window.option_add("*TCombobox*Listbox*selectForeground", on_accent)
         self.settings_window.configure(bg=win_bg)
 
-        frame.configure(bg=win_bg)
-        card.configure(bg=card_bg, highlightbackground=border)
+        frame = tk.Frame(self.settings_window, bg=win_bg, padx=px(14), pady=px(12))
+        frame.pack(fill="both", expand=True)
+
+        card = tk.Frame(frame, bg=card_bg, highlightthickness=1, highlightbackground=border)
+        card.pack(fill="both", expand=True)
+
         scroll_wrap = tk.Frame(card, bg=card_bg)
-        scroll_wrap.pack(fill="both", expand=True, padx=16, pady=(10, 8))
+        scroll_wrap.pack(fill="both", expand=True, padx=px(16), pady=(px(10), px(8)))
         scroll_canvas = tk.Canvas(scroll_wrap, bg=card_bg, highlightthickness=0, bd=0)
-        scroll_bar = tk.Scrollbar(scroll_wrap, orient="vertical", command=scroll_canvas.yview)
+        scroll_bar = ttk.Scrollbar(scroll_wrap, orient="vertical", command=scroll_canvas.yview, style="Settings.Vertical.TScrollbar")
         scroll_canvas.configure(yscrollcommand=scroll_bar.set)
         scroll_bar.pack(side="right", fill="y")
         scroll_canvas.pack(side="left", fill="both", expand=True)
@@ -2230,8 +2566,9 @@ class OverlayApp:
         scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
         self.settings_window.bind("<Destroy>", lambda _e: scroll_canvas.unbind_all("<MouseWheel>"))
 
-        notebook = ttk.Notebook(scroll_inner)
+        notebook = ttk.Notebook(scroll_inner, style="Settings.TNotebook")
         notebook.pack(fill="both", expand=True)
+        notebook.bind("<<NotebookTabChanged>>", lambda _e: scroll_canvas.yview_moveto(0))
 
         tab_appearance = tk.Frame(notebook, bg=card_bg)
         tab_metrics = tk.Frame(notebook, bg=card_bg)
@@ -2247,53 +2584,71 @@ class OverlayApp:
 
         def row(parent, title):
             r = tk.Frame(parent, bg=card_bg)
-            r.pack(fill="x", pady=6)
+            r.pack(fill="x", pady=px(6))
             tk.Label(r, text=title, bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold"), width=12, anchor="w").pack(side="left")
-            holder = tk.Frame(r, bg=win_bg, highlightthickness=1, highlightbackground=border)
+            holder = tk.Frame(r, bg=row_bg, highlightthickness=1, highlightbackground=border)
             holder.pack(side="right", fill="x", expand=True)
             return holder
 
+        def section_title(parent, text):
+            label = tk.Label(parent, text=text, bg=card_bg, fg=hint_fg, font=("Segoe UI", 8, "bold"), anchor="w")
+            label.pack(fill="x")
+            return label
+
         def segment(parent, key, options, rebuild=True):
-            btns=[]
+            btns = []
+
             def refresh():
-                for b,v in btns:
-                    active = state[key] == v
-                    b.configure(bg=accent if active else win_bg, fg=("#ffffff" if active else sub_fg), font=("Segoe UI", 9, "bold" if active else "normal"))
+                for b, v in btns:
+                    active = working[key] == v
+                    b.configure(bg=accent if active else row_bg, fg=(on_accent if active else sub_fg),
+                                font=("Segoe UI", 9, "bold" if active else "normal"))
+
             def choose(v):
-                state[key]=v
+                working[key] = v
                 refresh()
-                if key == "ui_language":
-                    apply_live(rebuild=True)
-                    if self.settings_window is not None and self.settings_window.winfo_exists():
-                        self.settings_window.destroy()
-                        self.settings_window = None
-                    self._toggle_settings()
+                if key in ("ui_language", "theme"):
+                    # Both re-theme the dialog itself: rebuild it in place
+                    # while keeping the pending working state.
+                    apply_and_reopen(rebuild=True)
                     return
-                apply_live(rebuild=rebuild)
-            for txt,v in options:
-                b=tk.Button(parent,text=txt,relief="flat",bd=0,padx=12,pady=7,cursor="hand2",highlightthickness=0,command=lambda vv=v: choose(vv))
-                b.pack(side="left",fill="x",expand=True,padx=1,pady=1)
-                btns.append((b,v))
+                preview(rebuild=rebuild)
+
+            for txt, v in options:
+                b = tk.Button(parent, text=txt, relief="flat", bd=0, padx=px(12), pady=px(7), cursor="hand2",
+                              highlightthickness=0, bg=row_bg, fg=sub_fg, activebackground=row_bg, activeforeground=text_fg,
+                              font=("Segoe UI", 9), command=lambda vv=v: choose(vv))
+                b.pack(side="left", fill="x", expand=True, padx=1, pady=1)
+                btns.append((b, v))
             refresh()
 
-        segment(row(tab_appearance, tr("语言", "Language")), "ui_language", [("中文", "zh"), ("English", "en")], rebuild=True)
-        segment(row(tab_appearance, tr("主题", "Theme")), "theme", [(name, name) if not lang_is_en else (THEME_EN_LABEL.get(name, name), name) for name in THEMES.keys()], rebuild=True)
-        segment(row(tab_appearance, tr("刷新间隔", "Refresh")), "refresh_interval_ms", [(tr("低功耗 2秒", "Low 2s"), 2000), (tr("标准 1秒", "Standard 1s"), 1000), (tr("高性能 0.5秒", "High 0.5s"), 500)], rebuild=False)
+        segment(row(tab_appearance, tr("语言", "Language")), "ui_language", [("中文", "zh"), ("English", "en")])
+        segment(row(tab_appearance, tr("主题", "Theme")), "theme",
+                [(name, name) if not current_en else (THEME_EN_LABEL.get(name, name), name) for name in THEMES.keys()])
+        segment(row(tab_appearance, tr("文字大小", "Text Size")), "font_scale",
+                [("90%", 0.9), ("100%", 1.0), ("115%", 1.15), ("130%", 1.3), ("140%", 1.4)])
+        segment(row(tab_appearance, tr("刷新间隔", "Refresh")), "refresh_interval_ms",
+                [(tr("低功耗 2秒", "Low 2s"), 2000), (tr("标准 1秒", "Standard 1s"), 1000), (tr("高性能 0.5秒", "High 0.5s"), 500)], rebuild=False)
 
         op = row(tab_appearance, tr("透明度", "Opacity"))
-        op_val = tk.Label(op, text="", fg=text_fg, bg=card_bg, font=("Segoe UI", 9, "bold"))
-        op_val.pack(side="right", padx=(0, 6))
-        op_var = tk.DoubleVar(value=float(state["window_opacity"]) * 100.0)
-        op_scale = tk.Scale(op, from_=0, to=100, orient="horizontal", showvalue=False, resolution=1, variable=op_var, bg=win_bg, highlightthickness=0, troughcolor=border, bd=0, length=220)
-        op_scale.pack(side="right", fill="x", expand=True, padx=(2, 6), pady=3)
+        op_val = tk.Label(op, text="", fg=text_fg, bg=row_bg, font=("Segoe UI", 9, "bold"))
+        op_val.pack(side="right", padx=(0, px(6)))
+        op_var = tk.DoubleVar(value=float(working["window_opacity"]) * 100.0)
+        op_scale = tk.Scale(op, from_=int(MIN_WINDOW_OPACITY * 100), to=100, orient="horizontal", showvalue=False,
+                            resolution=1, variable=op_var, bg=row_bg, highlightthickness=0, troughcolor=control_bg,
+                            bd=0, length=220, activebackground=accent)
+        op_scale.pack(side="right", fill="x", expand=True, padx=(2, px(6)), pady=3)
+
         def on_opacity(_=None):
-            v=max(0.0,min(100.0,float(op_var.get())))
-            state["window_opacity"]=round(v/100.0,2)
+            v = max(MIN_WINDOW_OPACITY * 100.0, min(100.0, float(op_var.get())))
+            working["window_opacity"] = round(v / 100.0, 2)
             op_val.configure(text=f"{int(v)}%")
-            apply_live(rebuild=False)
+            preview(rebuild=False)
+
         op_scale.configure(command=on_opacity)
         on_opacity()
-        tk.Label(tab_appearance, text=tr("刷新越快，占用越高。", "Higher refresh may use more resources."), bg=card_bg, fg=hint_fg, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 0), padx=6)
+        tk.Label(tab_appearance, text=tr("刷新越快，占用越高。", "Higher refresh may use more resources."),
+                 bg=card_bg, fg=hint_fg, font=("Segoe UI", 9)).pack(anchor="w", pady=(px(4), 0), padx=px(6))
 
         groups = [
             (tr("CPU", "CPU"), [(tr("占用", "Usage"), "show_cpu_usage"), (tr("温度", "Temp"), "show_cpu_temperature"), (tr("风扇", "Fan"), "show_cpu_fan"), (tr("功耗", "Power"), "show_cpu_power"), (tr("频率", "Clock"), "show_cpu_freq")]),
@@ -2306,8 +2661,9 @@ class OverlayApp:
         ]
 
         show_vars = {}
+        section_title(tab_metrics, tr("快捷方案", "Presets")).pack_configure(pady=(px(2), px(4)))
         preset = tk.Frame(tab_metrics, bg=card_bg)
-        preset.pack(fill="x", pady=(0, 8))
+        preset.pack(fill="x", pady=(0, px(4)))
 
         def apply_preset(name: str):
             keys = {k: False for _g, items in groups for _t, k in items}
@@ -2324,81 +2680,183 @@ class OverlayApp:
                 for k in keys:
                     keys[k] = bool(DEFAULT_CONFIG.get(k, True))
             for k, v in keys.items():
-                state[k] = v
+                working[k] = v
                 if k in show_vars:
                     show_vars[k].set(v)
-            apply_live(rebuild=True)
+            preview(rebuild=True)
 
         for t in (tr("游戏模式", "Game Mode"), tr("简洁模式", "Simple Mode"), tr("全部显示", "Show All"), tr("恢复默认", "Reset Default")):
-            tk.Button(preset, text=t, relief="flat", bd=0, padx=12, pady=7, cursor="hand2", bg=win_bg, fg=sub_fg, highlightthickness=0, font=("Segoe UI", 9), command=lambda n=t: apply_preset(n)).pack(side="left", padx=(0, 6))
+            tk.Button(preset, text=t, relief="flat", bd=0, padx=px(12), pady=px(7), cursor="hand2", bg=row_bg, fg=sub_fg,
+                      activebackground=control_bg, activeforeground=text_fg, highlightthickness=0, font=("Segoe UI", 9),
+                      command=lambda n=t: apply_preset(n)).pack(side="left", padx=(0, px(6)))
 
+        section_title(tab_metrics, tr("自定义监控项", "Custom metrics")).pack_configure(pady=(px(10), px(4)))
         for gname, items in groups:
             box = tk.Frame(tab_metrics, bg=card_bg, highlightthickness=1, highlightbackground=border)
-            box.pack(fill="x", pady=(0, 6))
-            tk.Label(box, text=gname, bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", padx=8, pady=(6, 2))
+            box.pack(fill="x", pady=(0, px(6)))
+            tk.Label(box, text=gname, bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", padx=px(8), pady=(px(6), px(2)))
             inner = tk.Frame(box, bg=card_bg)
-            inner.pack(fill="x", padx=8, pady=(0, 6))
+            inner.pack(fill="x", padx=px(8), pady=(0, px(6)))
             for i, (txt, key) in enumerate(items):
-                v = tk.BooleanVar(value=bool(state.get(key, True)))
+                v = tk.BooleanVar(value=bool(working.get(key, True)))
                 show_vars[key] = v
-                cb = tk.Checkbutton(inner, text=txt, variable=v, onvalue=True, offvalue=False, bg=card_bg, fg=sub_fg, activebackground=card_bg, selectcolor=card_bg, anchor="w", relief="flat", font=("Segoe UI", 9), command=lambda kk=key, vv=v: (state.__setitem__(kk, bool(vv.get())), apply_live(rebuild=True)))
-                cb.grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 10), pady=1)
+                cb = tk.Checkbutton(inner, text=txt, variable=v, onvalue=True, offvalue=False, bg=card_bg, fg=text_fg,
+                                    activebackground=card_bg, selectcolor=accent, anchor="w", relief="flat",
+                                    font=("Segoe UI", 9), command=lambda kk=key, vv=v: (working.__setitem__(kk, bool(vv.get())), preview(rebuild=True)))
+                cb.grid(row=i // 4, column=i % 4, sticky="w", padx=(0, px(10)), pady=1)
 
-        def make_switch(parent, text, key, rebuild=False):
+        section_title(tab_metrics, tr("监控项顺序", "Metric Order")).pack_configure(pady=(px(10), px(4)))
+        order_box = tk.Frame(tab_metrics, bg=card_bg, highlightthickness=1, highlightbackground=border)
+        order_box.pack(fill="x", pady=(0, px(6)))
+        order_inner = tk.Frame(order_box, bg=card_bg)
+        order_inner.pack(fill="both", padx=px(8), pady=px(8))
+
+        def normalized_order():
+            keys = [k for k in working.get("metric_order", []) if k in METRIC_MAP]
+            for key in DEFAULT_METRIC_ORDER:
+                if key not in keys:
+                    keys.append(key)
+            return keys
+
+        order_list = tk.Listbox(order_inner, bg=row_bg, fg=text_fg, selectbackground=accent, selectforeground=on_accent,
+                                relief="flat", highlightthickness=0, height=min(8, len(DEFAULT_METRIC_ORDER)),
+                                font=("Segoe UI", 9), activestyle="none", exportselection=False)
+        order_list.pack(side="left", fill="both", expand=True)
+        order_buttons = tk.Frame(order_inner, bg=card_bg)
+        order_buttons.pack(side="right", padx=(px(6), 0))
+
+        def refresh_order_list(keep=None):
+            keys = normalized_order()
+            order_list.delete(0, "end")
+            for key in keys:
+                order_list.insert("end", METRIC_LABEL_EN.get(key, key) if current_en else METRIC_MAP[key][1])
+            if keep is not None and 0 <= keep < order_list.size():
+                order_list.selection_clear(0, "end")
+                order_list.selection_set(keep)
+                order_list.see(keep)
+
+        def move_order(delta):
+            selection = order_list.curselection()
+            if not selection:
+                return
+            keys = normalized_order()
+            index = selection[0]
+            new_index = index + delta
+            if not 0 <= new_index < len(keys):
+                return
+            keys[index], keys[new_index] = keys[new_index], keys[index]
+            working["metric_order"] = keys
+            preview(rebuild=True)
+            refresh_order_list(keep=new_index)
+
+        for glyph, delta in (("↑", -1), ("↓", 1)):
+            tk.Button(order_buttons, text=glyph, relief="flat", bd=0, width=3, pady=px(6), cursor="hand2", bg=row_bg,
+                      fg=sub_fg, activebackground=control_bg, activeforeground=text_fg, highlightthickness=0,
+                      font=("Segoe UI", 10, "bold"), command=lambda d=delta: move_order(d)).pack(pady=(0, px(4)))
+        refresh_order_list()
+
+        def make_switch(parent, text, key, preview_key=False, rebuild=True):
             r = tk.Frame(parent, bg=card_bg)
-            r.pack(fill="x", pady=6)
+            r.pack(fill="x", pady=px(6))
             tk.Label(r, text=text, bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left")
-            can = tk.Canvas(r, width=44, height=22, highlightthickness=0, bg=card_bg, cursor="hand2")
+            track_w, track_h = px(44), px(22)
+            can = tk.Canvas(r, width=track_w, height=track_h, highlightthickness=0, bg=card_bg, cursor="hand2")
             can.pack(side="right", padx=(0, 2))
+
             def draw(v):
                 can.delete("all")
                 if v:
-                    can.create_rectangle(2, 2, 42, 20, fill=accent, outline="", tags="track")
-                    can.create_oval(25, 3, 40, 19, fill="#ffffff", outline="", tags="thumb")
+                    can.create_rectangle(px(2), px(2), track_w - px(2), track_h - px(2), fill=accent, outline="", tags="track")
+                    can.create_oval(track_w - track_h + px(3), px(3), track_w - px(3), track_h - px(3), fill=on_accent, outline="", tags="thumb")
                 else:
-                    can.create_rectangle(2, 2, 42, 20, fill="#ccd5e0", outline="", tags="track")
-                    can.create_oval(5, 3, 20, 19, fill="#f8fafc", outline="", tags="thumb")
-            def toggle(_=None):
-                state[key] = not bool(state[key])
-                draw(state[key])
-                apply_live(rebuild=rebuild)
-            can.bind("<Button-1>", toggle)
-            draw(bool(state.get(key, False)))
+                    can.create_rectangle(px(2), px(2), track_w - px(2), track_h - px(2), fill=control_bg, outline="", tags="track")
+                    can.create_oval(px(3), px(3), track_h - px(3), track_h - px(3), fill=row_bg, outline="", tags="thumb")
 
-        make_switch(tab_window, tr("始终置顶", "Always on Top"), "always_on_top", rebuild=False)
-        make_switch(tab_window, tr("最小化到通知区域", "Minimize to Tray"), "minimize_to_tray", rebuild=False)
-        make_switch(tab_window, tr("开机自启动", "Start with Windows"), "autostart", rebuild=False)
-        make_switch(tab_window, tr("紧凑模式", "Compact Mode"), "compact_mode", rebuild=True)
-        make_switch(tab_window, tr("显示分组标题", "Show Group Titles"), "show_group_titles", rebuild=True)
+            def toggle(_=None):
+                working[key] = not bool(working.get(key, False))
+                draw(working[key])
+                if preview_key:
+                    preview(rebuild=rebuild)
+
+            can.bind("<Button-1>", toggle)
+            draw(bool(working.get(key, False)))
+
+        make_switch(tab_window, tr("始终置顶", "Always on Top"), "always_on_top")
+        make_switch(tab_window, tr("最小化到通知区域", "Minimize to Tray"), "minimize_to_tray")
+        make_switch(tab_window, tr("开机自启动", "Start with Windows"), "autostart")
+        make_switch(tab_window, tr("紧凑模式", "Compact Mode"), "compact_mode", preview_key=True)
+        make_switch(tab_window, tr("显示分组标题", "Show Group Titles"), "show_group_titles", preview_key=True)
+
+        reset_pos_row = tk.Frame(tab_window, bg=card_bg)
+        reset_pos_row.pack(fill="x", pady=px(6))
+        tk.Label(reset_pos_row, text=tr("窗口位置", "Window Position"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left")
+
+        def reset_window_position():
+            working["window_x"] = 80
+            working["window_y"] = 80
+            preview(rebuild=False)
+            self.root.geometry("+80+80")
+
+        tk.Button(reset_pos_row, text=tr("重置窗口位置", "Reset Position"), relief="flat", bd=0, padx=px(12), pady=px(6),
+                  cursor="hand2", bg=row_bg, fg=sub_fg, activebackground=control_bg, activeforeground=text_fg,
+                  highlightthickness=0, font=("Segoe UI", 9), command=reset_window_position).pack(side="right")
 
         close_row = tk.Frame(tab_window, bg=card_bg)
-        close_row.pack(fill="x", pady=6)
+        close_row.pack(fill="x", pady=px(6))
         tk.Label(close_row, text=tr("关闭按钮行为", "Close Button"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left")
-        close_holder = tk.Frame(close_row, bg=win_bg, highlightthickness=1, highlightbackground=border)
+        close_holder = tk.Frame(close_row, bg=row_bg, highlightthickness=1, highlightbackground=border)
         close_holder.pack(side="right", fill="x", expand=True)
-        close_var = tk.StringVar(value=tr("最小化到通知区域", "Minimize to Tray") if state.get("close_action", "exit") == "tray" else tr("退出程序", "Exit"))
+        close_var = tk.StringVar(value=tr("最小化到通知区域", "Minimize to Tray") if working.get("close_action", "exit") == "tray" else tr("退出程序", "Exit"))
         close_combo = ttk.Combobox(close_holder, textvariable=close_var, state="readonly", font=("Segoe UI", 9), style="Settings.TCombobox")
         close_combo["values"] = (tr("退出程序", "Exit"), tr("最小化到通知区域", "Minimize to Tray"))
-        close_combo.pack(fill="x", padx=4, pady=4)
-        close_combo.bind("<<ComboboxSelected>>", lambda _e=None: (state.__setitem__("close_action", "tray" if close_var.get() == tr("最小化到通知区域", "Minimize to Tray") else "exit"), apply_live(rebuild=False)))
+        close_combo.pack(fill="x", padx=px(4), pady=px(4))
+        close_combo.bind("<<ComboboxSelected>>", lambda _e=None: working.__setitem__("close_action", "tray" if close_var.get() == tr("最小化到通知区域", "Minimize to Tray") else "exit"))
 
         fps_top = tk.Frame(tab_fps, bg=card_bg)
-        fps_top.pack(fill="x", pady=(0, 8))
+        fps_top.pack(fill="x", pady=(0, px(8)))
         tk.Label(fps_top, text=tr("FPS 监测", "FPS Monitor"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold")).pack(side="left")
-        fps_can = tk.Canvas(fps_top, width=44, height=22, highlightthickness=0, bg=card_bg, cursor="hand2")
+        fps_can = tk.Canvas(fps_top, width=px(44), height=px(22), highlightthickness=0, bg=card_bg, cursor="hand2")
         fps_can.pack(side="right", padx=(0, 2))
 
         fps_state = tk.Label(tab_fps, text="", bg=card_bg, fg=hint_fg, font=("Segoe UI", 9), anchor="w")
-        fps_state.pack(fill="x", pady=(0, 6))
+        fps_state.pack(fill="x", pady=(0, px(6)))
 
         proc_row = tk.Frame(tab_fps, bg=card_bg)
-        proc_row.pack(fill="x", pady=(0, 8))
+        proc_row.pack(fill="x", pady=(0, px(8)))
         tk.Label(proc_row, text=tr("目标进程", "Target Process"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold"), width=12, anchor="w").pack(side="left")
-        proc_holder = tk.Frame(proc_row, bg=win_bg, highlightthickness=1, highlightbackground=border)
+        proc_holder = tk.Frame(proc_row, bg=row_bg, highlightthickness=1, highlightbackground=border)
         proc_holder.pack(side="right", fill="x", expand=True)
-        process_var = tk.StringVar(value=state["fps_target_process"])
+        process_var = tk.StringVar(value=working["fps_target_process"])
         process_combo = ttk.Combobox(proc_holder, textvariable=process_var, state="readonly", font=("Segoe UI", 9), style="Settings.TCombobox")
-        process_combo.pack(side="left", fill="x", expand=True, padx=(4, 2), pady=4)
+        process_combo.pack(side="left", fill="x", expand=True, padx=(px(4), 2), pady=px(4))
+
+        presentmon_checked: dict = {}
+
+        def presentmon_ok() -> bool:
+            if "ok" not in presentmon_checked:
+                presentmon_checked["ok"] = bool(self.fps_service._presentmon_available) or self.fps_service._resolve_presentmon_path() is not None
+            return presentmon_checked["ok"]
+
+        def refresh_fps_state(process_names=None) -> None:
+            if not working["fps_enabled"]:
+                fps_state.configure(text=tr("状态：已关闭", "Status: Off"))
+                return
+            if not working["fps_target_process"]:
+                fps_state.configure(text=tr("状态：未选择目标", "Status: No target selected"))
+                return
+            if not presentmon_ok():
+                fps_state.configure(text=tr("状态：PresentMon 不可用", "Status: PresentMon unavailable"))
+                return
+            if process_names is None:
+                process_names = set(self._list_process_names())
+            if working["fps_target_process"] not in process_names:
+                fps_state.configure(text=tr("状态：等待目标进程启动", "Status: Waiting for the target process"))
+                return
+            current = self.fps_service.get_display_text()
+            if current in ("--", "不可用"):
+                fps_state.configure(text=tr("状态：正在捕获帧数据", "Status: Capturing frames"))
+            else:
+                fps_state.configure(text=tr("状态：捕获中", "Status: Capturing"))
 
         def refresh_process_list() -> None:
             try:
@@ -2412,151 +2870,142 @@ class OverlayApp:
             process_combo["values"] = values
             refresh_fps_state(process_names=set(names))
 
-        def refresh_fps_state(process_names=None) -> None:
-            if not state["fps_enabled"]:
-                fps_state.configure(text=tr("状态：已关闭", "Status: Off"))
-                return
-            if not state["fps_target_process"]:
-                fps_state.configure(text=tr("状态：未选择目标", "Status: No target selected"))
-                return
-            if process_names is None:
-                process_names = set(self._list_process_names())
-            if state["fps_target_process"] not in process_names:
-                fps_state.configure(text=tr("状态：未检测到进程", "Status: Process not found"))
-                return
-            current = self.fps_service.get_display_text()
-            if current in ("--", "不可用"):
-                fps_state.configure(text=tr("状态：正在获取 FPS 数据", "Status: Getting FPS data"))
-            else:
-                fps_state.configure(text=tr("状态：已检测到进程", "Status: Process detected"))
-
         def draw_fps_toggle(v):
             fps_can.delete("all")
             if v:
-                fps_can.create_rectangle(2, 2, 42, 20, fill=accent, outline="", tags="track")
-                fps_can.create_oval(25, 3, 40, 19, fill="#ffffff", outline="", tags="thumb")
+                fps_can.create_rectangle(px(2), px(2), px(42), px(20), fill=accent, outline="", tags="track")
+                fps_can.create_oval(px(25), px(3), px(40), px(19), fill=on_accent, outline="", tags="thumb")
             else:
-                fps_can.create_rectangle(2, 2, 42, 20, fill="#ccd5e0", outline="", tags="track")
-                fps_can.create_oval(5, 3, 20, 19, fill="#f8fafc", outline="", tags="thumb")
+                fps_can.create_rectangle(px(2), px(2), px(42), px(20), fill=control_bg, outline="", tags="track")
+                fps_can.create_oval(px(5), px(3), px(20), px(19), fill=row_bg, outline="", tags="thumb")
 
         def toggle_fps(_=None):
-            state["fps_enabled"] = not bool(state["fps_enabled"])
-            draw_fps_toggle(state["fps_enabled"])
-            apply_live(rebuild=False, apply_fps=True)
+            working["fps_enabled"] = not bool(working["fps_enabled"])
+            draw_fps_toggle(working["fps_enabled"])
             refresh_fps_state()
 
         fps_can.bind("<Button-1>", toggle_fps)
-        draw_fps_toggle(bool(state.get("fps_enabled", False)))
+        draw_fps_toggle(bool(working.get("fps_enabled", False)))
 
-        process_combo.bind("<<ComboboxSelected>>", lambda _e=None: (state.__setitem__("fps_target_process", process_var.get()), apply_live(rebuild=False, apply_fps=True), refresh_fps_state()))
-        tk.Button(proc_holder, text=tr("刷新列表", "Refresh"), relief="flat", bd=0, padx=8, pady=6, cursor="hand2", bg=win_bg, fg=sub_fg, font=("Segoe UI", 9), highlightthickness=0, command=refresh_process_list).pack(side="right", padx=(2, 4), pady=4)
+        process_combo.bind("<<ComboboxSelected>>", lambda _e=None: (working.__setitem__("fps_target_process", process_var.get()), refresh_fps_state()))
+        tk.Button(proc_holder, text=tr("刷新列表", "Refresh"), relief="flat", bd=0, padx=px(8), pady=px(6), cursor="hand2",
+                  bg=row_bg, fg=sub_fg, activebackground=control_bg, activeforeground=text_fg, font=("Segoe UI", 9),
+                  highlightthickness=0, command=refresh_process_list).pack(side="right", padx=(2, px(4)), pady=px(4))
         refresh_process_list()
 
-        # --- 高级设置页内容 ---
-        adv_card = tk.Frame(tab_advanced, bg=card_bg, highlightthickness=1, highlightbackground=border)
-        adv_card.pack(fill="x", pady=(8, 0))
+        def adv_section(title):
+            box = tk.Frame(tab_advanced, bg=card_bg, highlightthickness=1, highlightbackground=border)
+            box.pack(fill="x", pady=(0, px(8)))
+            tk.Label(box, text=title, bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", padx=px(10), pady=(px(8), px(2)))
+            inner = tk.Frame(box, bg=card_bg)
+            inner.pack(fill="x", padx=px(10), pady=(0, px(10)))
+            return inner
 
-        dashboard_frame = tk.Frame(adv_card, bg=card_bg)
-        dashboard_frame.pack(fill="x", padx=8, pady=8)
-        tk.Label(dashboard_frame, text=tr("局域网仪表盘", "LAN Dashboard"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
-        dashboard_enabled_var = tk.BooleanVar(value=state["lan_dashboard_enabled"])
-        tk.Checkbutton(dashboard_frame, text=tr("启用局域网仪表盘", "Enable LAN Dashboard"), variable=dashboard_enabled_var, bg=card_bg, fg=sub_fg, activebackground=card_bg, selectcolor=card_bg, font=("Segoe UI", 9), command=lambda: state.__setitem__("lan_dashboard_enabled", bool(dashboard_enabled_var.get()))).grid(row=1, column=0, sticky="w", pady=(4, 0))
-        dashboard_port_var = tk.StringVar(value=str(state["lan_dashboard_port"]))
-        tk.Label(dashboard_frame, text=tr("端口", "Port"), bg=card_bg, fg=sub_fg, font=("Segoe UI", 9)).grid(row=1, column=1, sticky="e", padx=(12, 4))
-        tk.Entry(dashboard_frame, textvariable=dashboard_port_var, width=7, bg=win_bg, fg=text_fg, insertbackground=text_fg, relief="solid", bd=1).grid(row=1, column=2, sticky="w")
-        dashboard_address = self._lan_dashboard_address(state["lan_dashboard_port"])
-        tk.Label(dashboard_frame, text=tr(f"保存后生效。当前访问地址：{dashboard_address}\n手机须与电脑处于同一 Wi-Fi。", f"Applies after Save. Current address: {dashboard_address}\nPhone and PC must use the same Wi-Fi."), bg=card_bg, fg=hint_fg, font=("Segoe UI", 8), justify="left", wraplength=620).grid(row=2, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        lan_section = adv_section(tr("局域网仪表盘", "LAN Dashboard"))
+        dashboard_enabled_var = tk.BooleanVar(value=working["lan_dashboard_enabled"])
+        tk.Checkbutton(lan_section, text=tr("启用局域网仪表盘", "Enable LAN Dashboard"), variable=dashboard_enabled_var,
+                       bg=card_bg, fg=text_fg, activebackground=card_bg, selectcolor=accent, font=("Segoe UI", 9),
+                       command=lambda: working.__setitem__("lan_dashboard_enabled", bool(dashboard_enabled_var.get()))).grid(row=0, column=0, sticky="w")
+        dashboard_port_var = tk.StringVar(value=str(working["lan_dashboard_port"]))
+        tk.Label(lan_section, text=tr("端口", "Port"), bg=card_bg, fg=sub_fg, font=("Segoe UI", 9)).grid(row=0, column=1, sticky="e", padx=(px(12), px(4)))
+        tk.Entry(lan_section, textvariable=dashboard_port_var, width=7, bg=row_bg, fg=text_fg, insertbackground=text_fg,
+                 relief="solid", bd=1, highlightthickness=0).grid(row=0, column=2, sticky="w")
+        dashboard_address = self._lan_dashboard_address(working["lan_dashboard_port"])
+        tk.Label(lan_section, text=tr(f"保存后生效。当前访问地址：{dashboard_address}\n手机须与电脑处于同一 Wi-Fi。",
+                                     f"Applies after Save. Current address: {dashboard_address}\nPhone and PC must use the same Wi-Fi."),
+                 bg=card_bg, fg=hint_fg, font=("Segoe UI", 8), justify="left", wraplength=620).grid(row=1, column=0, columnspan=3, sticky="w", pady=(px(5), 0))
 
-        # 重置所有设置
-        def reset_all():
-            if messagebox.askyesno(tr("确认", "Confirm"), tr("确定要重置所有设置吗？\n需要重启生效。", "Reset all settings?\nRestart required.")):
-                self.config.update(DEFAULT_CONFIG.copy())
-                self._save_config()
-                self._apply_lan_dashboard_config()
-                if self.settings_window is not None and self.settings_window.winfo_exists():
-                    self.settings_window.destroy()
-                    self.settings_window = None
-                self._rebuild_ui_fast()
+        diag_section = adv_section(tr("诊断", "Diagnostics"))
+        tk.Label(diag_section, text=tr("温度、功耗等显示 “—” 时，可在这里查看传感器原因。", "If temperature or power shows “—”, check the sensor reasons here."),
+                 bg=card_bg, fg=hint_fg, font=("Segoe UI", 8)).pack(side="left")
+        tk.Button(diag_section, text=tr("打开传感器诊断", "Open Sensor Diagnostics"), relief="flat", bd=0, padx=px(12), pady=px(6),
+                  cursor="hand2", bg=row_bg, fg=sub_fg, activebackground=control_bg, activeforeground=text_fg,
+                  highlightthickness=0, font=("Segoe UI", 9), command=self._toggle_diagnostics).pack(side="right")
 
-        reset_frame = tk.Frame(adv_card, bg=card_bg)
-        reset_frame.pack(fill="x", padx=8, pady=8)
-        tk.Label(reset_frame, text=tr("重置设置", "Reset Settings"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10)).pack(side="left")
-        tk.Button(reset_frame, text=tr("重置所有设置", "Reset All"), relief="flat", bd=0, padx=12, pady=6, cursor="hand2", bg="#dc3545", fg="#ffffff", font=("Segoe UI", 9, "bold"), highlightthickness=0, command=reset_all).pack(side="right")
-
-        # 打开配置文件目录
-        def open_config_dir():
-            import os
-            try:
-                os.startfile(str(self._app_dir()))
-            except Exception:
-                pass
-
-        dir_frame = tk.Frame(adv_card, bg=card_bg)
-        dir_frame.pack(fill="x", padx=8, pady=8)
-        tk.Label(dir_frame, text=tr("配置文件", "Config File"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10)).pack(side="left")
-        tk.Button(dir_frame, text=tr("打开目录", "Open Folder"), relief="flat", bd=0, padx=12, pady=6, cursor="hand2", bg=win_bg, fg=sub_fg, font=("Segoe UI", 9), highlightthickness=0, command=open_config_dir).pack(side="right")
-
-        gpu_frame = tk.Frame(adv_card, bg=card_bg)
-        gpu_frame.pack(fill="x", padx=8, pady=8)
-        tk.Label(gpu_frame, text=tr("监控显卡", "Monitored GPU"), bg=card_bg, fg=text_fg).pack(side="left")
+        gpu_section = adv_section(tr("监控显卡", "Monitored GPU"))
         devices = self.sensor_runtime.snapshot()["gpu_devices"]
-        selected_gpu = state.get("gpu_device_id")
+        selected_gpu = working.get("gpu_device_id")
         if selected_gpu is not None and selected_gpu not in [item[0] for item in devices]:
             devices.append((selected_gpu, tr("离线设备", "Offline device")))
         gpu_ids = [None] + [item[0] for item in devices]
         gpu_labels = [tr("自动（按设备标识）", "Automatic (device ID)")] + [name + " [" + identity + "]" for identity, name in devices]
-        gpu_combo = ttk.Combobox(gpu_frame, values=gpu_labels, state="readonly", width=34)
+        gpu_combo = ttk.Combobox(gpu_section, values=gpu_labels, state="readonly", width=34, style="Settings.TCombobox")
         gpu_combo.current(gpu_ids.index(selected_gpu) if selected_gpu in gpu_ids else 0)
         gpu_combo.pack(side="right")
+
         def select_gpu(_event=None):
-            state["gpu_device_id"] = gpu_ids[gpu_combo.current()]
-            apply_live(rebuild=False)
+            working["gpu_device_id"] = gpu_ids[gpu_combo.current()]
+
         gpu_combo.bind("<<ComboboxSelected>>", select_gpu)
 
-        # 日志级别
-        log_frame = tk.Frame(adv_card, bg=card_bg)
-        log_frame.pack(fill="x", padx=8, pady=8)
-        tk.Label(log_frame, text=tr("日志级别", "Log Level"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10)).pack(side="left")
-        log_var = tk.StringVar(value=str(state.get("log_level", "INFO")))
-        log_combo = ttk.Combobox(log_frame, textvariable=log_var, values=["DEBUG", "INFO", "WARNING", "ERROR"], state="readonly", width=12)
+        log_section = adv_section(tr("日志", "Logging"))
+        log_var = tk.StringVar(value=str(working.get("log_level", "INFO")))
+        log_combo = ttk.Combobox(log_section, textvariable=log_var, values=["DEBUG", "INFO", "WARNING", "ERROR"],
+                                 state="readonly", width=12, style="Settings.TCombobox")
         log_combo.pack(side="right")
-        log_combo.bind("<<ComboboxSelected>>", lambda _e=None: state.__setitem__("log_level", log_var.get()))
+        log_combo.bind("<<ComboboxSelected>>", lambda _e=None: working.__setitem__("log_level", log_var.get()))
 
-        # 传感器源状态
-        src_frame = tk.Frame(adv_card, bg=card_bg)
-        src_frame.pack(fill="x", padx=8, pady=8)
-        tk.Label(src_frame, text=tr("传感器源", "Sensor Sources"), bg=card_bg, fg=text_fg, font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        lhm_ok = self.sensor_runtime.snapshot()["sample_state"] == "ok"
-        smi_ok = shutil.which("nvidia-smi") is not None
-        src_text = f"LHM: {'OK' if lhm_ok else 'N/A'}\nnvidia-smi: {'OK' if smi_ok else 'N/A'}"
-        tk.Label(src_frame, text=src_text, bg=card_bg, fg=hint_fg, font=("Consolas", 9), justify="left").pack(anchor="w", padx=(16, 0))
+        data_section = adv_section(tr("数据", "Data"))
+        tk.Label(data_section, text=tr("配置与日志保存在本地数据目录。", "Config and logs live in the local data folder."),
+                 bg=card_bg, fg=hint_fg, font=("Segoe UI", 8)).pack(side="left")
 
-        btn_row = tk.Frame(frame, bg=win_bg)
-        btn_row.pack(fill="x", pady=(10, 0))
-
-        tk.Button(btn_row, text=tr("取消", "Cancel"), relief="flat", bd=0, padx=0, pady=10, cursor="hand2", bg=win_bg, fg=sub_fg, activebackground=border, activeforeground=text_fg, font=("Segoe UI", 11, "bold"), highlightthickness=0, command=lambda: (self.settings_window.destroy() if self.settings_window and self.settings_window.winfo_exists() else None)).pack(side="left", fill="x", expand=True, padx=(0, 6))
-
-        def save_and_close() -> None:
-            state["fps_target_process"] = process_var.get()
+        def open_config_dir():
             try:
-                state["lan_dashboard_port"] = int(dashboard_port_var.get().strip())
-            except ValueError:
-                state["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
-            if not 1024 <= state["lan_dashboard_port"] <= 65535:
-                state["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
-            apply_live(rebuild=False, apply_fps=True, force_fps_restart=True)
-            self._apply_lan_dashboard_config()
-            self._set_autostart(bool(state.get("autostart", False)))
-            # Apply log level
-            try:
-                log_lv = getattr(logging, str(state.get("log_level", "INFO")), logging.INFO)
-                self.logger.setLevel(log_lv)
+                os.startfile(str(runtime_data_dir()))
             except Exception:
                 pass
-            if self.settings_window is not None and self.settings_window.winfo_exists():
-                self.settings_window.destroy()
 
-        tk.Button(btn_row, text=tr("保存", "Save"), relief="flat", bd=0, padx=0, pady=10, cursor="hand2", bg=accent, fg="#ffffff", activebackground=accent, activeforeground="#ffffff", font=("Segoe UI", 11, "bold"), highlightthickness=0, command=save_and_close).pack(side="left", fill="x", expand=True, padx=(6, 0))
+        tk.Button(data_section, text=tr("打开数据目录", "Open Data Folder"), relief="flat", bd=0, padx=px(12), pady=px(6),
+                  cursor="hand2", bg=row_bg, fg=sub_fg, activebackground=control_bg, activeforeground=text_fg,
+                  highlightthickness=0, font=("Segoe UI", 9), command=open_config_dir).pack(side="right", padx=(px(6), 0))
+
+        def reset_all():
+            if messagebox.askyesno(tr("确认", "Confirm"), tr("确定要恢复默认设置吗？\n点击“保存”后生效。", "Reset all settings to defaults?\nTakes effect after Save.")):
+                for key, value in DEFAULT_CONFIG.items():
+                    working[key] = list(value) if isinstance(value, list) else value
+                apply_and_reopen(rebuild=True)
+
+        tk.Button(data_section, text=tr("重置所有设置", "Reset All"), relief="flat", bd=0, padx=px(12), pady=px(6),
+                  cursor="hand2", bg=danger, fg=on_accent, activebackground=danger, activeforeground=on_accent,
+                  font=("Segoe UI", 9, "bold"), highlightthickness=0, command=reset_all).pack(side="right")
+
+        btn_row = tk.Frame(frame, bg=win_bg)
+        btn_row.pack(fill="x", pady=(px(10), 0))
+
+        tk.Button(btn_row, text=tr("取消", "Cancel"), relief="flat", bd=0, padx=0, pady=px(10), cursor="hand2", bg=win_bg,
+                  fg=sub_fg, activebackground=control_bg, activeforeground=text_fg, font=("Segoe UI", 11, "bold"),
+                  highlightthickness=0, command=self._cancel_settings).pack(side="left", fill="x", expand=True, padx=(0, px(6)))
+
+        def save_and_close() -> None:
+            working["fps_target_process"] = process_var.get()
+            try:
+                working["lan_dashboard_port"] = int(str(dashboard_port_var.get()).strip())
+            except (TypeError, ValueError):
+                working["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
+            if not 1024 <= working["lan_dashboard_port"] <= 65535:
+                working["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
+            self.config.update(working)
+            self._save_config()
+            self.root.attributes("-topmost", bool(self.config["always_on_top"]))
+            self.root.attributes("-alpha", float(self.config["window_opacity"]))
+            pos_x, pos_y = self.config.get("window_x"), self.config.get("window_y")
+            if type(pos_x) is int and type(pos_y) is int:
+                self.root.geometry(f"+{pos_x}+{pos_y}")
+            self._apply_fps_config(force_restart=True)
+            self._apply_lan_dashboard_config()
+            self._set_autostart(bool(working.get("autostart", False)))
+            try:
+                self.logger.setLevel(getattr(logging, str(working.get("log_level", "INFO")), logging.INFO))
+            except Exception:
+                pass
+            self._rebuild_ui_fast()
+            self._close_settings_dialog()
+
+        tk.Button(btn_row, text=tr("保存", "Save"), relief="flat", bd=0, padx=0, pady=px(10), cursor="hand2", bg=accent,
+                  fg=on_accent, activebackground=accent, activeforeground=on_accent, font=("Segoe UI", 11, "bold"),
+                  highlightthickness=0, command=save_and_close).pack(side="left", fill="x", expand=True, padx=(px(6), 0))
+
+        self.settings_window.protocol("WM_DELETE_WINDOW", self._cancel_settings)
 
     def _rebuild_ui_fast(self) -> None:
         if self._ui_timer_id is not None:
@@ -2647,15 +3096,24 @@ class OverlayApp:
                 icon_path=icon_path,
                 on_show=lambda: self.root.after(0, self._show_from_tray),
                 on_exit=lambda: self.root.after(0, self._close_now),
+                on_settings=lambda: self.root.after(0, self._toggle_settings),
             )
             if self.tray_service.start():
                 self.tray_service.show()
         except Exception:
             self.tray_service = None
 
-    def _hide_to_tray(self) -> None:
-        if not bool(self.config.get("minimize_to_tray", True)):
+    def _minimize_clicked(self) -> None:
+        """The minimize button must always do something visible."""
+        if bool(self.config.get("minimize_to_tray", True)):
+            self._hide_to_tray()
             return
+        try:
+            self.root.iconify()
+        except Exception:
+            self.root.withdraw()
+
+    def _hide_to_tray(self) -> None:
         if self.tray_service is None:
             return
         try:
@@ -2783,6 +3241,8 @@ def validate_config(raw):
             valid = isinstance(value, list) and all(isinstance(x, str) and x in METRIC_MAP for x in value)
             if valid:
                 value = list(dict.fromkeys(value + DEFAULT_METRIC_ORDER))
+        elif key in ("window_x", "window_y"):
+            valid = value is None or type(value) is int
         elif isinstance(default, (int, float)):
             try:
                 valid = type(value) in (int, float) and math.isfinite(value)
@@ -2794,7 +3254,8 @@ def validate_config(raw):
                 elif key == "lan_dashboard_port":
                     valid = type(value) is int and 1024 <= value <= 65535
                 elif key == "window_opacity":
-                    value = min(1.0, max(0.0, value))
+                    # Keep the overlay recoverable: never persist a fully invisible window.
+                    value = min(1.0, max(MIN_WINDOW_OPACITY, value))
                 elif key == "font_scale":
                     value = min(1.4, max(.9, value))
         else:
