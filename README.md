@@ -16,13 +16,13 @@ With built-in Chinese/English language switching, Hardware Monitoring fits daily
 
 ## 下载 / Downloads
 
-当前正式版本：v1.0.10
-Current stable release: v1.0.10
+当前正式版本：v1.0.11
+Current stable release: v1.0.11
 
-- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.10
-- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.10.exe`
+- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.11
+- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.11.exe`
 
-安装包 SHA-256 / Installer SHA-256：`17D30A6B5DA1D65F2EEDE7BC4DB1DD51FDA16B0CBE162C36ED2138411E1B6AF6`
+安装包 SHA-256 / Installer SHA-256：`91FA414A2A384CEB34D566B37D91B9C8119A98392F2AC82BE885E3347DCF22C2`
 
 运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。设置窗口采用“保存 / 取消”事务语义：主题、透明度、文字大小、监控项等改动先在窗口上实时预览，只有点击“保存”才写入配置并应用 FPS / 局域网 / 开机自启动等系统级设置；点击“取消”或关闭设置窗口会完整还原。高级设置中的“打开数据目录”直达上述配置目录。悬浮窗位置会被记忆，并在下次启动时自动拉回可见屏幕范围；透明度存在 35% 的下限，避免窗口被调到完全不可见。主窗口标题栏提供采样状态指示：绿色表示实时，黄色表示部分传感器不可用，灰色表示数据过期或暂无数据。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
 卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
@@ -39,9 +39,9 @@ Current stable release: v1.0.10
 
 ## Android Termux 监控节点 / Android Termux Monitoring Node
 
-v1.0.10 提供可选的 Android Termux 监控节点，包含配置示例、安装与卸载脚本、启动脚本和健康检查。它适合需要从 Android 设备采集或上报监控状态的场景；仅使用 Windows 桌面悬浮监控时无需安装或配置此组件。
+v1.0.11 提供可选的 Android Termux 监控节点，包含配置示例、安装与卸载脚本、启动脚本和健康检查。它适合需要从 Android 设备采集或上报监控状态的场景；仅使用 Windows 桌面悬浮监控时无需安装或配置此组件。
 
-v1.0.10 includes an optional Android Termux monitoring node with configuration examples, install/uninstall scripts, startup scripts, and health checks. It is intended for Android-based monitoring scenarios; no setup is required for normal Windows desktop overlay use.
+v1.0.11 includes an optional Android Termux monitoring node with configuration examples, install/uninstall scripts, startup scripts, and health checks. It is intended for Android-based monitoring scenarios; no setup is required for normal Windows desktop overlay use.
 
 
 ## 运行时可靠性与兼容性 / Runtime reliability

@@ -1,9 +1,16 @@
 ﻿!define APP_NAME "Hardware Monitoring"
-!define APP_VERSION "1.0.10"
+!define APP_VERSION "1.0.11"
 !define APP_EXE "Hardware Monitoring.exe"
 !define DIST_DIR "dist\Hardware Monitoring"
 !define INSTALL_DIR "$PROGRAMFILES\${APP_NAME}"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
+
+VIProductVersion "1.0.11.0"
+VIAddVersionKey "ProductName" "${APP_NAME}"
+VIAddVersionKey "FileDescription" "${APP_NAME} Installer"
+VIAddVersionKey "FileVersion" "${APP_VERSION}"
+VIAddVersionKey "ProductVersion" "${APP_VERSION}"
+VIAddVersionKey "LegalCopyright" ""
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "HardwareMonitoring_Setup_v${APP_VERSION}.exe"

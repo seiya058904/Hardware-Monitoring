@@ -907,12 +907,27 @@ class SensorReader:
         return devices
 
     @staticmethod
+    def _decode_output(raw: bytes) -> str:
+        """Windows console tools emit localized ANSI/OEM bytes (GBK on zh-CN),
+        while UTF-8 mode changes Python's default pipe decoder. Try UTF-8
+        first (UTF-8 output, pure ASCII), then the system ANSI codepage, and
+        never let decoding raise."""
+        if not raw:
+            return ""
+        for encoding in ("utf-8", "mbcs"):
+            try:
+                return raw.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return raw.decode("utf-8", errors="replace")
+
+    @staticmethod
     def _run_cmd(cmd: list[str], timeout: float = 0.8) -> str:
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, creationflags=0x08000000)
+            result = subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=0x08000000)
             if result.returncode != 0:
                 return ""
-            return result.stdout.strip()
+            return SensorReader._decode_output(result.stdout).strip()
         except Exception:
             return ""
 
@@ -1914,6 +1929,7 @@ class OverlayApp:
         self._label_render: Dict[str, tuple] = {}
         self._bar_pct: Dict[str, int] = {}
         self._last_hint = None
+        self._sticky_hint: Optional[str] = None
         self._status_view = None
         self._last_sample_state = None
         self._settings_original: Optional[dict] = None
@@ -2073,6 +2089,7 @@ class OverlayApp:
         self.hint_label = tk.Label(self.body, text="", fg=theme["text_muted"], bg=theme["bg"], font=("Microsoft YaHei UI", int(9 * scale)), anchor="w")
         self.hint_label.pack(fill="x", pady=(4, 0))
         self._last_hint = None
+        self._sticky_hint = None
 
         self.root.update_idletasks()
         needed_w = self.container.winfo_reqwidth() + 2
@@ -2242,7 +2259,10 @@ class OverlayApp:
 
     def _dashboard_payload(self) -> dict:
         snapshot = self.sensor_runtime.snapshot()
-        metrics = {key: snapshot["metrics"][key] for key in PUBLIC_METRIC_FIELDS}
+        raw = snapshot["metrics"]
+        # Keep the LAN page consistent with the overlay: missing sensor values
+        # must surface as "--", not the raw "N/A" dataclass defaults.
+        metrics = {key: ("--" if raw[key] in ("", "N/A", "None") else raw[key]) for key in PUBLIC_METRIC_FIELDS}
         metrics["battery_status"] = format_metric("battery_status", Metrics(**snapshot["metrics"]), self.config.get("ui_language") == "en")
         metrics["source_status"] = snapshot["sample_state"]
         metrics["temp_hint"] = snapshot["error_code"]
@@ -2269,7 +2289,7 @@ class OverlayApp:
                 label.configure(text=text, fg=fg)
                 self._label_render[key] = (text, fg)
         hint = status_text(metrics.temp_hint, is_en)
-        if force or self._last_hint != hint:
+        if self._sticky_hint is None and (force or self._last_hint != hint):
             self.hint_label.configure(text=hint)
             self._last_hint = hint
 
@@ -3106,6 +3126,8 @@ class OverlayApp:
     def _minimize_clicked(self) -> None:
         """The minimize button must always do something visible."""
         if bool(self.config.get("minimize_to_tray", True)):
+            # On tray failure this keeps the window up with a sticky hint,
+            # so the click can never be a silent no-op.
             self._hide_to_tray()
             return
         try:
@@ -3113,18 +3135,31 @@ class OverlayApp:
         except Exception:
             self.root.withdraw()
 
-    def _hide_to_tray(self) -> None:
+    def _show_sticky_hint(self, text: str) -> None:
+        """Surface an operator-facing condition (tray failure) that must stay
+        visible across metric refreshes until cleared or the UI is rebuilt."""
+        self._sticky_hint = text
+        self._last_hint = text
+        self.hint_label.configure(text=text)
+
+    def _tray_available(self) -> bool:
         if self.tray_service is None:
-            return
+            return False
         try:
-            shown = self.tray_service.show()
-            if shown:
-                self.root.withdraw()
-            else:
-                self.root.deiconify()
-                self.hint_label.configure(text="Tray unavailable; window kept open" if self.config.get("ui_language") == "en" else "托盘不可用，窗口保持显示")
+            return bool(self.tray_service.show())
         except Exception:
             self.logger.exception("Tray operation failed")
+            return False
+
+    def _hide_to_tray(self) -> bool:
+        """Returns True when the window ended up hidden in the tray."""
+        if not self._tray_available():
+            self.root.deiconify()
+            self._show_sticky_hint("Tray unavailable; window kept open" if self.config.get("ui_language") == "en" else "托盘不可用，窗口保持显示")
+            return False
+        self.root.withdraw()
+        self._sticky_hint = None
+        return True
 
     def _show_from_tray(self) -> None:
         try:
@@ -3138,8 +3173,10 @@ class OverlayApp:
     def _on_close_clicked(self) -> None:
         action = str(self.config.get("close_action", "exit"))
         if action == "tray" and bool(self.config.get("minimize_to_tray", True)):
-            self._hide_to_tray()
-            return
+            if self._hide_to_tray():
+                return
+            # Tray is unavailable: "hide to tray" cannot be honored, so exit
+            # instead of leaving repeated close attempts without any effect.
         self._close_now()
 
     def _set_autostart(self, enabled: bool) -> bool:

@@ -14,6 +14,21 @@ from fps_stream import CaptureStream
 
 
 class RuntimeRegressions(unittest.TestCase):
+    def test_lan_payload_normalizes_missing_values_like_the_overlay(self):
+        application = OverlayApp.__new__(OverlayApp)
+        application.config = DEFAULT_CONFIG.copy()
+        application.sensor_runtime = SensorRuntime(None, lambda: application.config, Metrics)
+        application.sensor_runtime.metrics = Metrics(cpu_usage="10%", cpu_temp="N/A", gpu_usage="N/A", network_latency="")
+        application.sensor_runtime.last_success_monotonic = time.monotonic()
+        application.sensor_runtime.state = "degraded"
+        application.sensor_runtime.sample_generation = 1
+        application.fps_service = FpsService(Path('.'), Path('.'), logging.getLogger('lan-normalize'))
+        payload = application._dashboard_payload()
+        self.assertEqual("10%", payload["metrics"]["cpu_usage"])
+        self.assertEqual("--", payload["metrics"]["cpu_temp"])
+        self.assertEqual("--", payload["metrics"]["gpu_usage"])
+        self.assertEqual("--", payload["metrics"]["network_latency"])
+
     def test_public_snapshot_does_not_leak_internal_diagnostics(self):
         application = OverlayApp.__new__(OverlayApp)
         application.config = DEFAULT_CONFIG.copy()

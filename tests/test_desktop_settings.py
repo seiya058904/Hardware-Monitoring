@@ -225,6 +225,58 @@ class SettingsTransactionTests(unittest.TestCase):
                 self.application._on_close_clicked()
                 close_now.assert_called_once()
 
+    def test_tray_failure_paths_are_never_silent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory, close_action="tray", minimize_to_tray=True)
+            application = self.application
+            application.tray_service = None
+            # Minimize must give visible feedback even when the tray is dead.
+            application._minimize_clicked()
+            self.root.update()
+            self.assertEqual("normal", application.root.state())
+            self.assertIn("托盘不可用", application.hint_label.cget("text"))
+            # Close with close_action=tray degrades to a graceful exit instead
+            # of being a silent no-op.
+            with patch.object(OverlayApp, "_close_now") as close_now:
+                application._on_close_clicked()
+                close_now.assert_called_once()
+
+    def test_tray_hide_hides_window_when_tray_available(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory, close_action="tray", minimize_to_tray=True)
+            application = self.application
+
+            class FakeTray:
+                def show(self):
+                    return True
+
+                def close(self):
+                    pass
+
+            application.tray_service = FakeTray()
+            application._minimize_clicked()
+            self.root.update()
+            self.assertNotEqual("normal", application.root.state())
+            with patch.object(OverlayApp, "_close_now") as close_now:
+                application._on_close_clicked()
+                close_now.assert_not_called()
+
+    def test_sticky_hint_survives_metric_refresh_until_rebuild(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            application = self.application
+            application.tray_service = None
+            application._minimize_clicked()
+            sticky = application.hint_label.cget("text")
+            self.assertIn("托盘不可用", sticky)
+            application._update_metrics_loop()
+            self.root.update()
+            self.assertEqual(sticky, application.hint_label.cget("text"))
+            application._rebuild_ui_fast()
+            application._update_metrics_loop()
+            self.root.update()
+            self.assertNotEqual(sticky, application.hint_label.cget("text"))
+
 
 if __name__ == "__main__":
     unittest.main()
