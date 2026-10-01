@@ -22,6 +22,46 @@ class SensorDeviceTests(unittest.TestCase):
         reader._lhm_hardware = Obj(SensorType=Obj(Load='Load', Temperature='Temperature', Clock='Clock'))
         return reader
 
+    def test_smi_fallback_refreshes_each_sample_and_recovers(self):
+        reader = self.reader()
+        reader._nvidia_smi = 'fixture-nvidia-smi'
+        outputs = ['GPU-a,A,%s,50,1000,80,100,8000' % value for value in (10, 20, 30)]
+        outputs += ['', 'GPU-a,A,40,N/A,1000,80,100,8000']
+        config = dict(DEFAULT_CONFIG, show_cpu_temperature=False, show_network_latency=False)
+        with patch.object(reader, '_run_cmd', side_effect=outputs) as command, patch('app.psutil.cpu_percent', return_value=7):
+            samples = [reader.read_metrics(config) for _ in outputs]
+        self.assertEqual(['10%', '20%', '30%', 'N/A', '40%'], [s.gpu_usage for s in samples])
+        self.assertEqual(5, command.call_count)
+        self.assertEqual('N/A', samples[-1].gpu_temp)
+        self.assertTrue(all(s.cpu_usage == '7%' for s in samples))
+
+    def test_smi_fallback_preserves_requested_device_across_order_and_disappearance(self):
+        reader = self.reader()
+        reader._nvidia_smi = 'fixture-nvidia-smi'
+        a = 'GPU-a,A,10,50,1000,80,100,8000'
+        b = 'GPU-b,B,20,N/A,1200,90,200,24000'
+        config = dict(DEFAULT_CONFIG, gpu_device_id='nvidia:GPU-b', show_cpu_temperature=False, show_network_latency=False)
+        with patch.object(reader, '_run_cmd', side_effect=[a+'\n'+b, b+'\n'+a, a, b]):
+            samples = [reader.read_metrics(config) for _ in range(4)]
+        self.assertEqual(['20%', '20%', 'N/A', '20%'], [s.gpu_usage for s in samples])
+        self.assertEqual('nvidia:GPU-b', config['gpu_device_id'])
+
+    def test_lhm_to_smi_and_back_uses_current_provider(self):
+        reader = self.reader()
+        reader._nvidia_smi = 'fixture-nvidia-smi'
+        gpu = hardware('/gpu/a', 'GpuNvidia', [sensor('Load', 'GPU Core', 55)])
+        computer = Obj(Hardware=[gpu])
+        config = dict(DEFAULT_CONFIG, show_cpu_temperature=False, show_network_latency=False)
+        with patch.object(reader, '_run_cmd', return_value='GPU-a,A,20,50,1000,80,100,8000') as command:
+            reader._lhm_computer = computer
+            first = reader.read_metrics(config)
+            reader._lhm_computer = None
+            second = reader.read_metrics(config)
+            reader._lhm_computer = computer
+            third = reader.read_metrics(config)
+        self.assertEqual(['55%', '20%', '55%'], [s.gpu_usage for s in [first, second, third]])
+        self.assertEqual(1, command.call_count)
+
     def test_identity_bridge_does_not_wrap_identifier_class(self):
         reader = self.reader()
         class Hardware:

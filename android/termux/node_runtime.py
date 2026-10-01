@@ -293,6 +293,7 @@ class InstanceLock:
                     return self._owns_lock_path() and self._read_lock_record()[0] == self._record
                 record = self._new_record()
                 if record is None:
+                    self.error_code = "instance_lock_io_error"
                     return False
                 for attempt in range(5):
                     if attempt:
@@ -315,6 +316,7 @@ class InstanceLock:
                     try:
                         claim_path.unlink()
                     except OSError:
+                        self.error_code = "instance_lock_io_error"
                         return False
         except OSError:
             self.error_code = "instance_lock_io_error"

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import StringIO
 import json
+import errno
 from pathlib import Path
 import signal
 import subprocess
@@ -192,6 +193,23 @@ class MonitorNodeTests(unittest.TestCase):
 
         self.assertEqual(code, monitor_node.INSTANCE_LOCK_CONTENDED_EXIT)
         self.assertFalse(lock.released)
+
+    def test_real_lock_io_errors_reach_cli_as_failure_not_contention(self):
+        for code in (errno.ENOSPC, errno.EIO, errno.EACCES):
+            with self.subTest(errno=code), TemporaryDirectory() as directory:
+                root = Path(directory)
+                with (
+                    patch.object(monitor_node, 'load_config', return_value=NodeConfig()),
+                    patch.object(monitor_node, '_node_paths', return_value=(root/'state.json', root/'monitor.log', root/'monitor.lock')),
+                    patch('android.termux.node_runtime.os.link', side_effect=OSError(code, 'injected')) as publish,
+                    patch.object(monitor_node, 'run_once') as checks,
+                ):
+                    result = monitor_node.run_forever(root/'config.json')
+                self.assertNotEqual(monitor_node.INSTANCE_LOCK_CONTENDED_EXIT, result)
+                self.assertNotEqual(0, result)
+                self.assertEqual(1, publish.call_count)
+                checks.assert_not_called()
+                self.assertIn('instance_lock_io_error', (root/'monitor.log').read_text())
 
     def test_run_forever_advances_saves_dispatches_and_waits_for_interval(self):
         config = NodeConfig(

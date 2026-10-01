@@ -1161,6 +1161,9 @@ class SensorReader:
         except Exception:
             pass
 
+        # Discovery belongs to this sample, not to the previous UI device list.
+        self.gpu_devices = []
+        self._selected_gpu = None
         lhm = self._read_lhm_values()
         if not self.gpu_devices:
             devices = self._read_smi_devices()

@@ -26,3 +26,15 @@ jobs:
 
       - name: Repository hygiene
         run: git diff --check
+
+  termux-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Termux Python contracts (Linux, not Android device validation)
+        run: python -m unittest discover -s android/termux/tests -v
+      - name: CLI to supervisor exit and retry contracts
+        run: bash android/termux/tests/test_boot.sh
