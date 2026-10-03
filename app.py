@@ -545,7 +545,7 @@ class SensorReader:
         self._lhm_hardware = None
         self._lhm_error = ""
         self._lhm_retry_count = 0
-        self._last_fallback_ts = 0.0
+        self._last_fallback_ts: Optional[float] = None
         self._fallback_cache: Dict[str, Optional[float]] = {
             "cpu_coretemp": None,
             "cpu_temp": None,
@@ -558,7 +558,7 @@ class SensorReader:
         self._last_net = None
         self._last_io_ts = 0.0
         self._ping_cache: Optional[float] = None
-        self._ping_cache_ts = 0.0
+        self._ping_cache_ts: Optional[float] = None
         self._nvidia_smi = shutil.which("nvidia-smi")
         self._init_lhm()
 
@@ -1097,7 +1097,7 @@ class SensorReader:
         return None
 
     def _read_fallback_values(self, lhm: Dict[str, Optional[float]], config: dict) -> Dict[str, Optional[float]]:
-        now = time.time()
+        now = time.monotonic()
         needs_cpu_temp = bool(config.get("show_cpu_temperature", True)) and lhm.get("cpu_temp") is None
         needs_gpu_temp = False  # No verified cross-provider device identity.
         needs_memory_freq = bool(config.get("show_memory_freq", False)) and lhm.get("memory_freq") is None
@@ -1107,7 +1107,7 @@ class SensorReader:
         needs_fallback = needs_cpu_temp or needs_gpu_temp or needs_memory_freq or needs_vram
         if not needs_fallback:
             return self._fallback_cache
-        if now - self._last_fallback_ts < 10:
+        if self._last_fallback_ts is not None and now - self._last_fallback_ts < 10:
             return self._fallback_cache
 
         self._last_fallback_ts = now
@@ -1256,12 +1256,11 @@ class SensorReader:
         except Exception:
             pass
 
-        # Network latency (cached for 2 seconds)
+        # Network latency shares the sample's monotonic clock (10-second TTL).
         try:
-            now = time.time()
             if not bool(config.get("show_network_latency", False)):
                 self._ping_cache = None
-            elif now - self._ping_cache_ts >= 10:
+            elif self._ping_cache_ts is None or now - self._ping_cache_ts >= 10:
                 self._ping_cache = self._read_ping()
                 self._ping_cache_ts = now
             if self._ping_cache is not None:
@@ -2246,9 +2245,9 @@ class OverlayApp:
             return
         if self.config.get("window_x") == x and self.config.get("window_y") == y:
             return
-        self.config["window_x"] = x
-        self.config["window_y"] = y
-        self._save_config()
+        candidate = dict(self.config, window_x=x, window_y=y)
+        if self._save_config(candidate):
+            self.config.update(candidate)
 
     def _set_close_hover(self, is_hover: bool) -> None:
         theme = self._active_theme
@@ -3007,8 +3006,10 @@ class OverlayApp:
                 working["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
             if not 1024 <= working["lan_dashboard_port"] <= 65535:
                 working["lan_dashboard_port"] = DEFAULT_CONFIG["lan_dashboard_port"]
-            self.config.update(working)
-            self._save_config()
+            candidate = {**self.config, **working}
+            if not self._save_config(candidate):
+                return
+            self.config.update(candidate)
             self.root.attributes("-topmost", bool(self.config["always_on_top"]))
             self.root.attributes("-alpha", float(self.config["window_opacity"]))
             pos_x, pos_y = self.config.get("window_x"), self.config.get("window_y")
@@ -3047,18 +3048,20 @@ class OverlayApp:
         self._bind_drag_recursive(self.container)
         self._ui_timer_id = self.root.after(300, self._update_metrics_loop)
 
-    def _save_config(self) -> None:
+    def _save_config(self, candidate: Optional[dict] = None) -> bool:
         app_dir = runtime_data_dir()
         config_path = app_dir / "config.json"
         try:
             app_dir.mkdir(parents=True, exist_ok=True)
             preserve_invalid_config(config_path)
             tmp_path = config_path.with_suffix(".json.tmp")
-            tmp_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp_path.write_text(json.dumps(self.config if candidate is None else candidate, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp_path.replace(config_path)
+            return True
         except Exception as exc:
             self.logger.error("Failed to save config: %s", exc)
             messagebox.showerror(APP_NAME, "配置未保存 / Configuration was not saved", parent=self.root)
+            return False
 
     def _apply_fps_config(self, force_restart: bool = False) -> None:
         enabled = bool(self.config.get("fps_enabled", False))

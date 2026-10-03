@@ -199,6 +199,73 @@ class SettingsTransactionTests(unittest.TestCase):
                 button.invoke()
             self.assertEqual([str(Path(directory).resolve())], [str(Path(p).resolve()) for p in opened])
 
+    def assert_save_failure_is_transactional(self, stage):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            path = Path(directory) / 'config.json'
+            original_bytes = b'{"lan_dashboard_enabled":"false"}'
+            path.write_bytes(original_bytes)
+            original = dict(self.application.config)
+            method = {'tmp': 'write_text', 'backup': 'open', 'replace': 'replace'}[stage]
+            real_method = getattr(Path, method)
+
+            def fail(target, *args, **kwargs):
+                if (stage == 'backup' and target.name.startswith('config.invalid-')) or (stage != 'backup' and target.name == 'config.json.tmp'):
+                    raise OSError('synthetic ' + stage + ' failure')
+                return real_method(target, *args, **kwargs)
+
+            def prepare():
+                self.open_settings()
+                self.application._settings_working.update(fps_enabled=True, lan_dashboard_enabled=True, autostart=True)
+
+            with patch.object(self.application, '_apply_fps_config') as fps, \
+                 patch.object(self.application, '_apply_lan_dashboard_config') as lan, \
+                 patch.object(self.application, '_set_autostart') as startup, \
+                 patch('app.messagebox.showerror') as error:
+                for finish in ['cancel', 'retry']:
+                    prepare()
+                    window = self.application.settings_window
+                    working = self.application._settings_working
+                    with patch.object(Path, method, autospec=True, side_effect=fail):
+                        find_button(window, '保存').invoke()
+                    self.root.update()
+                    self.assertEqual(original_bytes, path.read_bytes())
+                    self.assertEqual(original, self.application.config)
+                    self.assertEqual(original, self.application._settings_original)
+                    self.assertIs(working, self.application._settings_working)
+                    self.assertTrue(window.winfo_exists())
+                    fps.assert_not_called()
+                    lan.assert_not_called()
+                    startup.assert_not_called()
+                    if finish == 'cancel':
+                        find_button(window, '取消').invoke()
+                        self.assertEqual(original, self.application.config)
+                        self.assertIsNone(self.application._settings_working)
+                    else:
+                        find_button(window, '保存').invoke()
+                self.assertEqual(2, error.call_count)
+                fps.assert_called_once_with(force_restart=True)
+                lan.assert_called_once_with()
+                startup.assert_called_once_with(True)
+                saved = json.loads(path.read_text(encoding='utf-8'))
+                for key in ['fps_enabled', 'lan_dashboard_enabled', 'autostart']:
+                    self.assertTrue(saved[key])
+                    self.assertTrue(self.application.config[key])
+                self.assertIsNone(self.application._settings_working)
+                self.assertIsNone(self.application.settings_window)
+                backups = list(Path(directory).glob('config.invalid-*.json'))
+                self.assertEqual(1, len(backups))
+                self.assertEqual(original_bytes, backups[0].read_bytes())
+
+    def test_tmp_write_failure_keeps_settings_retryable_and_cancellable(self):
+        self.assert_save_failure_is_transactional('tmp')
+
+    def test_backup_failure_keeps_settings_retryable_and_cancellable(self):
+        self.assert_save_failure_is_transactional('backup')
+
+    def test_replace_failure_keeps_settings_retryable_and_cancellable(self):
+        self.assert_save_failure_is_transactional('replace')
+
     def test_minimize_button_respects_minimize_to_tray(self):
         with tempfile.TemporaryDirectory() as directory:
             self.build_app(directory, minimize_to_tray=False)
