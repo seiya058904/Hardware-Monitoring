@@ -16,13 +16,13 @@ With built-in Chinese/English language switching, Hardware Monitoring fits daily
 
 ## 下载 / Downloads
 
-当前正式版本：v1.0.11
-Current stable release: v1.0.11
+当前正式版本：v1.0.12
+Current stable release: v1.0.12
 
-- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.11
-- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.11.exe`
+- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.12
+- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.12.exe`
 
-安装包 SHA-256 / Installer SHA-256：`91FA414A2A384CEB34D566B37D91B9C8119A98392F2AC82BE885E3347DCF22C2`
+安装包 SHA-256 / Installer SHA-256：`A7CD3EC21B5B476C1067F174F3F9637D0CCC2AAF8AB6C7D0A093A571E87C2F9E`
 
 运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。设置窗口采用“保存 / 取消”事务语义：主题、透明度、文字大小、监控项等改动先在窗口上实时预览，只有点击“保存”才写入配置并应用 FPS / 局域网 / 开机自启动等系统级设置；点击“取消”或关闭设置窗口会完整还原。高级设置中的“打开数据目录”直达上述配置目录。悬浮窗位置会被记忆，并在下次启动时自动拉回可见屏幕范围；透明度存在 35% 的下限，避免窗口被调到完全不可见。主窗口标题栏提供采样状态指示：绿色表示实时，黄色表示部分传感器不可用，灰色表示数据过期或暂无数据。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
 卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
