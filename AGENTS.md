@@ -38,7 +38,7 @@ Packaging needs PyInstaller and NSIS; NSIS consumes `dist\Hardware Monitoring`. 
 - Workers publish synchronized state; only Tkinter's thread updates widgets. Do not release native sensors from another thread while sampling is blocked.
 - LAN is default-off and read-only with bounded connections/shutdown. Do not introduce remote control, public exposure or automatic firewall changes.
 - PresentMon ownership is scoped to this application's sessions. Upgrade/uninstall manages manifest-listed files, never unrelated processes or user data.
-- Termux stays outbound-only; `config.example.json` and tracked files must contain no secrets.
+- Termux stays outbound-only; `android/termux/config.example.json` and tracked files must contain no secrets.
 - Use four-space Python, standard-library-first imports and `tr(zh, en)` for visible desktop text.
 
 ## Changes and commits
