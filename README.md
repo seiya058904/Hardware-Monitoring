@@ -27,6 +27,12 @@ Current stable release: v1.0.12
 运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。设置窗口采用“保存 / 取消”事务语义：主题、透明度、文字大小、监控项等改动先在窗口上实时预览，只有点击“保存”才写入配置并应用 FPS / 局域网 / 开机自启动等系统级设置；点击“取消”或关闭设置窗口会完整还原。高级设置中的“打开数据目录”直达上述配置目录。悬浮窗位置会被记忆，并在下次启动时自动拉回可见屏幕范围；透明度存在 35% 的下限，避免窗口被调到完全不可见。主窗口标题栏提供采样状态指示：绿色表示实时，黄色表示部分传感器不可用，灰色表示数据过期或暂无数据。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
 卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
 
+## 本地历史安装包 / Local historical installers
+
+本地保留的 v1.0.3–v1.0.9 安装包集中在 `archive/installers/`，用于版本追溯，仍由 `.gitignore` 排除。它们不参与当前构建；正式下载和版本以以上 Release 为准。该目录只在保留了历史安装包的本地工作区中存在。
+
+Local retained v1.0.3–v1.0.9 installers live in `archive/installers/` for version history and remain excluded by `.gitignore`. They are not build inputs. Use the release above for current downloads; this directory exists only in workspaces retaining those local installers.
+
 ## 局域网仪表盘 / LAN dashboard
 
 在“高级设置”中主动启用“局域网仪表盘”后，手机可在同一 Wi-Fi 下访问设置中显示的地址（默认端口 `8765`）。页面每秒刷新一次，仅提供 `GET /`、`GET /api/metrics` 和 `GET /healthz`；不含远程控制、文件访问或公网/防火墙自动配置。关闭该开关或退出程序会停止服务并释放端口。Windows 防火墙提示时仅允许专用网络。
