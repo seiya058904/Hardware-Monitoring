@@ -17,6 +17,7 @@ class RuntimeRegressions(unittest.TestCase):
     def test_lan_payload_normalizes_missing_values_like_the_overlay(self):
         application = OverlayApp.__new__(OverlayApp)
         application.config = DEFAULT_CONFIG.copy()
+        application._sampling_config = dict(application.config)
         application.sensor_runtime = SensorRuntime(None, lambda: application.config, Metrics)
         application.sensor_runtime.metrics = Metrics(cpu_usage="10%", cpu_temp="N/A", gpu_usage="N/A", network_latency="")
         application.sensor_runtime.last_success_monotonic = time.monotonic()
@@ -32,6 +33,7 @@ class RuntimeRegressions(unittest.TestCase):
     def test_public_snapshot_does_not_leak_internal_diagnostics(self):
         application = OverlayApp.__new__(OverlayApp)
         application.config = DEFAULT_CONFIG.copy()
+        application._sampling_config = dict(application.config)
         application.sensor_runtime = SensorRuntime(None, lambda: application.config, Metrics)
         application.sensor_runtime.metrics = Metrics(cpu_usage="10%", source_status=r"Missing DLL: C:\Users\private-user\secret\file.dll")
         application.sensor_runtime.last_success_monotonic = time.monotonic()

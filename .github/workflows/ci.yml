@@ -19,7 +19,7 @@ jobs:
 
       - name: Syntax check
         run: |
-          python -m py_compile app.py sensor_runtime.py fps_stream.py fps_sessions.py dashboard_server.py
+          python -m py_compile app.py sensor_runtime.py service_runtime.py fps_stream.py fps_sessions.py dashboard_server.py
 
       - name: Unit tests
         run: python -m unittest discover -s tests -v

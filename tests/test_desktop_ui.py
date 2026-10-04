@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from app import DEFAULT_CONFIG, Metrics, OverlayApp, TrayIconService, configure_tray_abi
+from quiet_desktop import quiet_desktop
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows desktop')
@@ -19,6 +20,8 @@ class DesktopTests(unittest.TestCase):
             def close(self): pass
         with tempfile.TemporaryDirectory() as directory, patch('app.SensorReader', Reader), patch('app.setup_logger', return_value=logging.getLogger('ui-test')), patch('app.runtime_data_dir', return_value=Path(directory)), patch.object(OverlayApp, '_setup_tray'), patch.object(OverlayApp, '_is_autostart_enabled', return_value=False), patch.object(OverlayApp, '_set_autostart', return_value=True), patch.object(OverlayApp, '_list_process_names', return_value=[]):
             root = tk.Tk()
+            quiet = quiet_desktop(root)
+            quiet.__enter__()
             errors = []
             root.report_callback_exception = lambda *args: errors.append(args)
             config = DEFAULT_CONFIG.copy()
@@ -63,6 +66,7 @@ class DesktopTests(unittest.TestCase):
                         if not root.winfo_exists(): break
                     except tk.TclError: break
                     time.sleep(.02)
+                quiet.__exit__(None, None, None)
 
     def test_tray_failure_does_not_report_success(self):
         configure_tray_abi()

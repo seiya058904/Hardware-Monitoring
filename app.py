@@ -14,6 +14,7 @@ import tempfile
 import subprocess
 import sys
 import threading
+import queue
 import time
 import tkinter as tk
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +27,7 @@ from typing import Dict, Optional
 from fps_sessions import SessionRegistry
 from fps_stream import CaptureStream
 from sensor_runtime import SensorRuntime
+from service_runtime import ServiceRuntime
 from dashboard_server import DashboardHTTPServer
 
 import psutil
@@ -298,6 +300,10 @@ def status_text(code, en=False):
         "no_sensor_data": ("尚无可用数据", "No sensor data"),
         "sample_read_failed": ("采样失败", "Sampling failed"), "sample_stale": ("数据已过期", "Data stale"),
         "device_read_failed": ("设备读取失败", "Device read failed"),
+        "gpu_device_unavailable": ("所选显卡不可用，保留设备选择", "Selected GPU unavailable; selection retained"),
+        "lan_start_failed": ("仪表盘未启动，请检查端口占用", "Dashboard did not start; check the port"),
+        "fps_capture_failed": ("FPS 采集失败，请检查目标或权限", "FPS capture failed; check target or permissions"),
+        "fps_stale": ("FPS 已过期，等待新的帧", "FPS stale; waiting for new frames"),
         "temperatures_unavailable": ("CPU/GPU 温度接口不可用", "CPU/GPU temperature sensors unavailable"),
         "cpu_temperature_unavailable": ("CPU 温度接口不可用", "CPU temperature sensor unavailable"),
         "gpu_temperature_unavailable": ("GPU 温度接口不可用", "GPU temperature sensor unavailable"),
@@ -356,7 +362,7 @@ class _DashboardHTTPServer(DashboardHTTPServer):
 class LanDashboardService:
     """Small read-only HTTP server for a LAN dashboard."""
 
-    _PAGE = """<!doctype html><html lang=zh-CN data-theme=dark><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Hardware Monitoring</title><style>*{box-sizing:border-box}:root{--bg:#0b0f17;--card:#141b28;--line:#24304a;--tx:#e8eef8;--dim:#93a4bf;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--accent:#5b9dff}:root[data-theme=light]{--bg:#f2f5fa;--card:#ffffff;--line:#dbe3ef;--tx:#1f2937;--dim:#5b6b82;--ok:#16a34a;--warn:#b45309;--bad:#dc2626;--accent:#2563eb}html,body{margin:0}body{background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}header{display:flex;align-items:center;justify-content:space-between;gap:8px;max-width:860px;margin:0 auto;padding:14px 16px 2px}.brand{font-size:17px;font-weight:650;letter-spacing:.2px}.tools{display:flex;gap:8px}.tool{background:var(--card);border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:5px 11px;font-size:13px;cursor:pointer;line-height:1.3;white-space:nowrap;flex:none}.tool:hover{color:var(--tx)}main{max-width:860px;margin:0 auto;padding:6px 16px 28px}.state{display:flex;align-items:center;gap:8px;padding:10px 2px 12px;font-size:14px;color:var(--dim)}#dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}.state.ok #dot{background:var(--ok)}.state.warn #dot{background:var(--warn)}.state.bad #dot{background:var(--bad)}.state.ok #stateText{color:var(--tx)}.state.bad #stateText{color:var(--bad)}.age{margin-left:auto;font-size:12.5px;color:var(--dim);font-variant-numeric:tabular-nums}.hero{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 13px;min-width:0}.card .k{font-size:12.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.card .v{font-size:19px;margin-top:6px;font-variant-numeric:tabular-nums;word-break:break-word}.hero .v{font-size:23px;font-weight:600}.card.small .v{font-size:16px}.card.dim .v{color:var(--dim);opacity:.8}.group{margin-top:18px}.group h2{font-size:12.5px;color:var(--dim);font-weight:650;margin:0 0 8px;letter-spacing:.5px;text-transform:uppercase}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}@media(max-width:480px){.hero{grid-template-columns:repeat(2,1fr)}.hero .v{font-size:21px}body{font-size:15px}}@media(max-width:340px){.hero{grid-template-columns:1fr 1fr;gap:8px}.card{padding:10px}}</style></head><body><header><div class=brand>Hardware Monitoring</div><div class=tools><button id=langBtn class=tool type=button>EN</button><button id=themeBtn class=tool type=button>&#9788;</button></div></header><main><div id=state class=state><i id=dot></i><span id=stateText>...</span><span id=age class=age></span></div><section class=hero id=hero></section><div id=groups></div></main><script>
+    _PAGE = """<!doctype html><html lang=zh-CN data-theme=dark><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Hardware Monitoring</title><style>*{box-sizing:border-box}:root{--bg:#0b0f17;--card:#141b28;--line:#24304a;--tx:#e8eef8;--dim:#93a4bf;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--accent:#5b9dff}:root[data-theme=light]{--bg:#f2f5fa;--card:#ffffff;--line:#dbe3ef;--tx:#1f2937;--dim:#5b6b82;--ok:#16a34a;--warn:#b45309;--bad:#dc2626;--accent:#2563eb}html,body{margin:0}body{background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}header{display:flex;align-items:center;justify-content:space-between;gap:8px;max-width:860px;margin:0 auto;padding:14px 16px 2px}.brand{font-size:17px;font-weight:650;letter-spacing:.2px}.tools{display:flex;gap:8px}.tool{background:var(--card);border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:5px 11px;font-size:13px;cursor:pointer;line-height:1.3;white-space:nowrap;flex:none}.tool:hover{color:var(--tx)}.tool{min-height:36px;min-width:36px}.tool:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.brand{min-width:0;line-height:1.2}main{max-width:860px;margin:0 auto;padding:6px 16px 28px}.state{display:flex;align-items:center;gap:8px;padding:10px 2px 12px;font-size:14px;color:var(--dim)}#dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}.state.ok #dot{background:var(--ok)}.state.warn #dot{background:var(--warn)}.state.bad #dot{background:var(--bad)}.state.ok #stateText{color:var(--tx)}.state.bad #stateText{color:var(--bad)}.age{margin-left:auto;font-size:12.5px;color:var(--dim);font-variant-numeric:tabular-nums}.hero{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 13px;min-width:0}.card .k{font-size:12.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.card .v{font-size:19px;margin-top:6px;font-variant-numeric:tabular-nums;word-break:break-word}.hero .v{font-size:23px;font-weight:600}.card.small .v{font-size:16px}.card.dim .v{color:var(--dim)}.group{margin-top:18px}.group h2{font-size:12.5px;color:var(--dim);font-weight:650;margin:0 0 8px;letter-spacing:.5px;text-transform:uppercase}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}@media(max-width:480px){.tool{min-height:44px;min-width:44px}.hero{grid-template-columns:repeat(2,1fr)}.hero .v{font-size:21px}body{font-size:15px}}@media(max-width:340px){.hero{grid-template-columns:1fr 1fr;gap:8px}.card{padding:10px}}</style></head><body><header><div class=brand>Hardware Monitoring</div><div class=tools><button id=langBtn class=tool type=button>EN</button><button id=themeBtn class=tool type=button>&#9788;</button></div></header><main><div id=state class=state role=status aria-live=polite><i id=dot></i><span id=stateText>...</span><span id=age class=age></span></div><section class=hero id=hero></section><div id=groups></div></main><script>
 const HERO=[['cpu_usage','CPU','CPU'],['gpu_usage','GPU','GPU'],['memory_usage','\u5185\u5b58','RAM'],['gpu_temp','GPU \u6e29\u5ea6','GPU Temp'],['fps','FPS','FPS'],['fps_low_1','1% Low','1% Low']];
 const GROUPS=[
  {title:['\u7cfb\u7edf','System'],keys:[['cpu_temp','CPU \u6e29\u5ea6','CPU Temp'],['cpu_freq','CPU \u9891\u7387','CPU Clock'],['cpu_power','CPU \u529f\u8017','CPU Power']]},
@@ -372,12 +378,28 @@ const heroEl=document.querySelector('#hero'),groupsEl=document.querySelector('#g
 let lang=null,theme=null;
 function heroCard(k){const c=document.createElement('div');c.className='card';c.id='c-'+k[0];c.innerHTML='<div class=k></div><div class=v>--</div>';return c}
 function build(){heroEl.innerHTML='';groupsEl.innerHTML='';HERO.forEach(k=>heroEl.appendChild(heroCard(k)));GROUPS.forEach(g=>{const s=document.createElement('section');s.className='group';const h=document.createElement('h2');s.appendChild(h);const grid=document.createElement('div');grid.className='grid';g.keys.forEach(k=>{const c=document.createElement('div');c.className='card small';c.id='c-'+k[0];if(k[0]==='network_latency'){c.title='Ping 8.8.8.8'}c.innerHTML='<div class=k></div><div class=v>--</div>';grid.appendChild(c)});s.appendChild(grid);groupsEl.appendChild(s)});applyLang()}
-function applyLang(){const t=L[lang];document.documentElement.lang=lang==='en'?'en':'zh-CN';document.querySelector('#langBtn').textContent=lang==='en'?'\u4e2d\u6587':'EN';HERO.forEach(k=>{const c=document.getElementById('c-'+k[0]);c.querySelector('.k').textContent=lang==='en'?k[2]:k[1]});const heads=groupsEl.querySelectorAll('.group h2');GROUPS.forEach((g,i)=>{heads[i].textContent=lang==='en'?g.title[1]:g.title[0]});const ks=[].concat(...GROUPS.map(g=>g.keys));ks.forEach(k=>{const c=document.getElementById('c-'+k[0]);if(c){c.querySelector('.k').textContent=lang==='en'?k[2]:k[1]}})}
+function applyLang(){const t=L[lang];document.documentElement.lang=lang==='en'?'en':'zh-CN';document.querySelector('#langBtn').textContent=lang==='en'?'\u4e2d\u6587':'EN';HERO.forEach(k=>{const c=document.getElementById('c-'+k[0]);c.querySelector('.k').textContent=lang==='en'?k[2]:k[1]});const heads=groupsEl.querySelectorAll('.group h2');GROUPS.forEach((g,i)=>{heads[i].textContent=lang==='en'?g.title[1]:g.title[0]});const ks=[].concat(...GROUPS.map(g=>g.keys));ks.forEach(k=>{const c=document.getElementById('c-'+k[0]);if(c){c.querySelector('.k').textContent=lang==='en'?k[2]:k[1]}});document.querySelector('#langBtn').setAttribute('aria-label',lang==='en'?'Switch to Chinese':'切换为英文');document.querySelector('#themeBtn').setAttribute('aria-label',lang==='en'?'Switch theme':'切换主题');renderState();renderValues(lastMetrics)}
 function applyTheme(v){theme=v;document.documentElement.dataset.theme=v;document.querySelector('#themeBtn').innerHTML=v==='dark'?'&#9788;':'&#9790;';try{localStorage.setItem('hwmon-lan-theme',v)}catch(e){}}
-function sampleHealth(d){const keys=['sample_state','sample_age_ms','sample_generation','error_code'];if(keys.some(k=>k in d)){const state=d.sample_state,age=d.sample_age_ms;if(!keys.every(k=>k in d)||!['ok','degraded','stale','unavailable','stopping'].includes(state)||!Number.isInteger(d.sample_generation)||d.sample_generation<0||typeof d.error_code!=='string'||!(age===null||(Number.isInteger(age)&&age>=0))||(['ok','degraded'].includes(state)&&(age===null||d.sample_generation===0)))return 'invalid';return state}let stamp=Date.parse(d.updated_at),age=Date.now()-stamp;if(!Number.isFinite(stamp))return 'invalid';if(age<-5000)return 'clock_skew';return age>5000?'stale':'ok'}
-function renderValues(metrics){ALL_KEYS.forEach(key=>{const c=document.getElementById('c-'+key);if(!c)return;const v=c.querySelector('.v');const good=['ok','degraded'].includes(current);const val=good?(metrics[key]??'--'):'--';v.textContent=val;c.classList.toggle('dim',val==='--')})}
-let current='unavailable';
-async function tick(){try{const r=await fetch('/api/metrics',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw 0;const d=await r.json(),m=d.metrics;if(d.status!=='ok'||!m||typeof m!=='object'||Array.isArray(m))throw 0;current=sampleHealth(d);const good=['ok','degraded'].includes(current);const t=L[lang];stateText.textContent=t.states[current]||current;stateEl.className='state '+(current==='ok'?'ok':current==='degraded'?'warn':'bad');if(good){const age=d.sample_age_ms;ageEl.textContent=(age!==null&&age<5000)?t.fresh:t.last+' '+(d.updated_at||'--').slice(11,19)}else{ageEl.textContent=''}renderValues(m)}catch(e){current='offline';const t=L[lang];stateText.textContent=t.states.offline;stateEl.className='state bad';ageEl.textContent='';renderValues({})}finally{setTimeout(tick,1000)}}
+function sampleHealth(d){const keys=['sample_state','sample_age_ms','sample_generation','error_code'];if(keys.some(k=>k in d)){const state=d.sample_state,age=d.sample_age_ms;if(('sample_stale_after_ms' in d&&(!Number.isInteger(d.sample_stale_after_ms)||d.sample_stale_after_ms<5000))||!keys.every(k=>k in d)||!['ok','degraded','stale','unavailable','stopping'].includes(state)||!Number.isInteger(d.sample_generation)||d.sample_generation<0||typeof d.error_code!=='string'||!(age===null||(Number.isInteger(age)&&age>=0))||(['ok','degraded'].includes(state)&&(age===null||d.sample_generation===0)))return 'invalid';return state}let stamp=Date.parse(d.updated_at),age=Date.now()-stamp;if(!Number.isFinite(stamp))return 'invalid';if(age<-5000)return 'clock_skew';return age>5000?'stale':'ok'}
+let current='unavailable',lastPayload=null,lastMetrics={},receivedAt=0;
+function renderValues(metrics){
+ const translated={'关闭':['关闭','Off'],'未选择':['未选择','Not selected'],'不可用':['不可用','Unavailable'],'充电中':['充电中','Charging'],'使用中':['使用中','On battery']};
+ const good=['ok','degraded'].includes(current);
+ ALL_KEYS.forEach(key=>{const c=document.getElementById('c-'+key);if(!c)return;const v=c.querySelector('.v');const raw=good?(metrics[key]??'--'):'--';const val=translated[raw]?translated[raw][lang==='en'?1:0]:raw;if(v.textContent!==String(val))v.textContent=val;c.classList.toggle('dim',raw==='--'||['关闭','未选择','不可用'].includes(raw))})
+}
+function renderState(){
+ const t=L[lang];stateText.textContent=t.states[current]||current;stateEl.className='state '+(current==='ok'?'ok':current==='degraded'?'warn':'bad');
+ if(['ok','degraded'].includes(current)&&lastPayload){const age=lastPayload.sample_age_ms+(performance.now()-receivedAt);ageEl.textContent=age<5000?t.fresh:t.last+' '+(lastPayload.updated_at||'--').slice(11,19)}else ageEl.textContent=''
+}
+function checkFreshness(){
+ if(lastPayload&&['ok','degraded'].includes(current)&&Number.isInteger(lastPayload.sample_age_ms)&&lastPayload.sample_age_ms+performance.now()-receivedAt>(lastPayload.sample_stale_after_ms??5000)){current='stale';renderValues({})}renderState()
+}
+async function tick(){
+ try{const r=await fetch('/api/metrics',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw 0;const d=await r.json(),m=d.metrics;if(d.status!=='ok'||!m||typeof m!=='object'||Array.isArray(m))throw 0;lastPayload=d;lastMetrics=m;receivedAt=performance.now();current=sampleHealth(d);renderState();renderValues(m)}
+ catch(e){current='offline';renderState();renderValues({})}
+ finally{setTimeout(tick,1000)}
+}
+setInterval(checkFreshness,500);
 (function init(){try{lang=localStorage.getItem('hwmon-lan-lang')}catch(e){}if(lang!=='zh'&&lang!=='en'){lang=(navigator.language||'').toLowerCase().indexOf('zh')===0?'zh':'en'}try{theme=localStorage.getItem('hwmon-lan-theme')}catch(e){}if(theme!=='dark'&&theme!=='light'){theme=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'}applyTheme(theme);document.querySelector('#themeBtn').addEventListener('click',()=>applyTheme(theme==='dark'?'light':'dark'));document.querySelector('#langBtn').addEventListener('click',()=>{lang=lang==='en'?'zh':'en';try{localStorage.setItem('hwmon-lan-lang',lang)}catch(e){}applyLang()});build();tick()})();
 </script></body></html>"""
 
@@ -536,6 +558,9 @@ class SensorReader:
         ]
 
     def __init__(self) -> None:
+        # Prime psutil on the same worker that will sample it. Subsequent
+        # samples measure the full interval without a blocking 150 ms sleep.
+        psutil.cpu_percent(interval=None)
         self._identifier_reader = None
         self.device_outcomes = {}
         self.gpu_devices = []
@@ -1150,7 +1175,7 @@ class SensorReader:
         self._requested_gpu = config.get("gpu_device_id")
         metrics = Metrics()
         try:
-            metrics.cpu_usage = f"{psutil.cpu_percent(interval=0.15):.0f}%"
+            metrics.cpu_usage = f"{psutil.cpu_percent(interval=None):.0f}%"
             vm = psutil.virtual_memory()
             used_gb = (vm.total - vm.available) / (1024.0 ** 3)
             total_gb = vm.total / (1024.0 ** 3)
@@ -1173,6 +1198,8 @@ class SensorReader:
                 lhm.update(devices[chosen][1])
                 self._selected_gpu = chosen
         fb = self._read_fallback_values(lhm, config)
+        selected_gpu_missing = self._requested_gpu is not None and self._requested_gpu not in {identity for identity, _ in self.gpu_devices}
+        self.device_outcomes['selected_gpu'] = not selected_gpu_missing
 
         if lhm.get("cpu_usage") is not None:
             metrics.cpu_usage = f"{lhm['cpu_usage']:.0f}%"
@@ -1218,6 +1245,8 @@ class SensorReader:
             metrics.temp_hint = "cpu_temperature_unavailable"
         elif metrics.gpu_temp == "N/A":
             metrics.temp_hint = "gpu_temperature_unavailable"
+        if selected_gpu_missing:
+            metrics.temp_hint = "gpu_device_unavailable"
 
         now = time.monotonic()
         for category, getter, keys, output_keys in (
@@ -1301,6 +1330,8 @@ class FpsService:
         self._stderr_workers = []
         self._capture = CaptureStream()
         self._capture_identity = None
+        self._low_dirty = False
+        self._error_code = ''
 
     def configure(self, enabled: bool, target_process: str, force_restart: bool = False) -> None:
         target_process = (target_process or "").strip()
@@ -1314,12 +1345,17 @@ class FpsService:
             if not self._enabled:
                 self._display_text = "关闭"
                 self._low_display_text = "关闭"
+                self._low_dirty = False
+                self._error_code = ''
             elif not self._target_process:
                 self._display_text = "未选择"
                 self._low_display_text = "未选择"
+                self._low_dirty = False
+                self._error_code = ''
             elif self._resolve_presentmon_path() is None:
                 self._display_text = "不可用"
                 self._low_display_text = "不可用"
+                self._low_dirty = False
             elif force_restart:
                 need_restart = True
             elif (not prev_enabled and self._enabled) or (prev_target != self._target_process):
@@ -1422,6 +1458,8 @@ class FpsService:
             self._display_text = "--"
             self._low_display_text = "--"
             self._frame_ms_samples.clear()
+            self._low_dirty = False
+            self._error_code = ''
 
         self._worker_thread = threading.Thread(target=self._run_worker, args=(generation,), daemon=True)
         self._workers = [worker for worker in self._workers if worker.is_alive()]
@@ -1457,18 +1495,20 @@ class FpsService:
         self.stop()
 
     def get_display_text(self) -> str:
-        with self._lock:
-            if self._enabled and self._target_process and self._presentmon_available:
-                if self._last_value_ts > 0 and (time.monotonic() - self._last_value_ts) > 4.0:
-                    return "--"
-            return self._display_text
+        return self.snapshot()['fps']
 
     def get_low_display_text(self) -> str:
+        return self.snapshot()['fps_low_1']
+
+    def snapshot(self) -> dict:
         with self._lock:
-            if self._enabled and self._target_process and self._presentmon_available:
-                if self._last_value_ts > 0 and (time.monotonic() - self._last_value_ts) > 4.0:
-                    return "--"
-            return self._low_display_text
+            age = (time.monotonic() - self._last_value_ts) if self._last_value_ts else None
+            if self._enabled and self._target_process and self._presentmon_available and age is not None and age > 4:
+                return dict(fps='--', fps_low_1='--', target_process=self._target_process, error_code='fps_stale')
+            if self._low_dirty:
+                self._low_display_text = self._calc_low_1_text()
+                self._low_dirty = False
+            return dict(fps=self._display_text, fps_low_1=self._low_display_text, target_process=self._target_process, error_code=self._error_code)
 
     def _run_worker(self, generation: int) -> None:
         with self._lock:
@@ -1491,7 +1531,11 @@ class FpsService:
         if proc is None or proc.stdout is None:
             with self._lock:
                 if self._enabled and self._target_process:
-                    self._display_text = "--"
+                    self._display_text = self._low_display_text = "不可用"
+                    self._error_code = 'fps_capture_failed'
+                    self._low_dirty = False
+                    self._frame_ms_samples.clear()
+                    self._last_value_ts = 0
             return
 
         try:
@@ -1512,8 +1556,12 @@ class FpsService:
             self._finish_process(proc)
             with self._lock:
                 if generation == self._generation and self._enabled and self._target_process and self._display_text not in ("不可用", "未选择", "关闭"):
-                    self._display_text = "--"
-                    self._low_display_text = "--"
+                    failed = proc.poll() not in (0, None)
+                    self._display_text = self._low_display_text = "不可用" if failed else "--"
+                    self._error_code = 'fps_capture_failed' if failed else ''
+                    self._low_dirty = False
+                    self._frame_ms_samples.clear()
+                    self._last_value_ts = 0
             try:
                 self._logger.info("PresentMon exited with code: %s", proc.poll())
             except Exception:
@@ -1559,6 +1607,7 @@ class FpsService:
                 return
             if changed:
                 self._frame_ms_samples.clear()
+                self._low_dirty = False
                 self._last_value_ts = 0
                 self._display_text = self._low_display_text = "--"
             self._capture_identity = capture.selected
@@ -1566,7 +1615,9 @@ class FpsService:
                 return
             self._display_text = str(int(round(fps)))
             self._frame_ms_samples.append(frame_ms)
-            self._low_display_text = self._calc_low_1_text()
+            # The UI/API computes the percentile once per requested view,
+            # instead of sorting 600 values while holding the lock per frame.
+            self._low_dirty = True
             self._last_value_ts = time.monotonic()
 
     def _calc_low_1_text(self) -> str:
@@ -1779,6 +1830,10 @@ class TrayIconService:
             except Exception:
                 pass
 
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=1)
+        self._enabled = False
+
     def _thread_proc(self) -> None:
         configure_tray_abi()
         self._owned_icon = None
@@ -1921,7 +1976,8 @@ class OverlayApp:
         self.config = config
         self.logger = setup_logger(runtime_data_dir())
         self.config["autostart"] = self._is_autostart_enabled()
-        self.sensor_runtime = SensorRuntime(SensorReader, lambda: dict(self.config), Metrics, self.logger)
+        self._sampling_config = dict(config)
+        self.sensor_runtime = SensorRuntime(SensorReader, lambda: self._sampling_config, Metrics, self.logger)
         self.fps_service = FpsService(self._app_dir(), self._runtime_base_dir(), self.logger)
         self.labels: Dict[str, tk.Label] = {}
         self.bars: Dict[str, tk.Canvas] = {}
@@ -1951,6 +2007,9 @@ class OverlayApp:
         self._metrics_updated_at = 0.0
         self.lan_dashboard = LanDashboardService(self._dashboard_snapshot, self._dashboard_updated_at, self.logger, self._dashboard_payload)
         self._ui_timer_id: Optional[str] = None
+        self._tray_commands = queue.SimpleQueue()
+        self._requested_fps_config = None
+        self.service_runtime = ServiceRuntime(self._stop_background_services, self.logger)
 
         self._setup_window()
         self._build_ui()
@@ -2248,6 +2307,7 @@ class OverlayApp:
         candidate = dict(self.config, window_x=x, window_y=y)
         if self._save_config(candidate):
             self.config.update(candidate)
+            self._sampling_config = dict(self.config)
 
     def _set_close_hover(self, is_hover: bool) -> None:
         theme = self._active_theme
@@ -2271,15 +2331,27 @@ class OverlayApp:
         if snapshot["sample_state"] not in ("ok", "degraded"):
             metrics = {key: "--" for key in PUBLIC_METRIC_FIELDS}
             metrics["source_status"] = snapshot["sample_state"]
-        metrics["fps"] = self.fps_service.get_display_text()
-        metrics["fps_low_1"] = self.fps_service.get_low_display_text()
-        return {key: snapshot[key] for key in ("updated_at", "sample_state", "sample_age_ms", "sample_generation", "error_code")} | {"status": "ok", "metrics": metrics}
+        fps = self._fps_snapshot()
+        metrics.update({key: fps[key] for key in ('fps', 'fps_low_1', 'target_process')})
+        return {key: snapshot[key] for key in ("updated_at", "sample_state", "sample_age_ms", "sample_generation", "sample_stale_after_ms", "error_code")} | {"status": "ok", "metrics": metrics}
 
     def _dashboard_snapshot(self) -> dict:
         return self._dashboard_payload()["metrics"]
 
     def _dashboard_updated_at(self) -> str:
         return self.sensor_runtime.snapshot()["updated_at"]
+
+    def _fps_snapshot(self) -> dict:
+        fps = self.fps_service.snapshot()
+        target = str(self._sampling_config.get('fps_target_process', '') or '').strip()
+        if not self._sampling_config.get('fps_enabled', False):
+            fps.update(fps='关闭', fps_low_1='关闭', error_code='')
+        elif not target:
+            fps.update(fps='未选择', fps_low_1='未选择', error_code='')
+        elif fps['target_process'] != target:
+            fps.update(fps='--', fps_low_1='--', error_code='')
+        fps['target_process'] = target or '--'
+        return fps
 
     def _render_metrics(self, metrics, is_en, force=False) -> None:
         theme = self._active_theme
@@ -2341,6 +2413,12 @@ class OverlayApp:
     def _update_metrics_loop(self) -> None:
         if self._stop_event.is_set():
             return
+        # Tray/native threads never call Tk, including root.after().
+        while not self._tray_commands.empty():
+            command = self._tray_commands.get_nowait()
+            {'show': self._show_from_tray, 'settings': self._toggle_settings, 'exit': self._close_now}[command]()
+            if self._stop_event.is_set():
+                return
         if self._ui_timer_id is not None:
             self.root.after_cancel(self._ui_timer_id)
             self._ui_timer_id = None
@@ -2351,15 +2429,23 @@ class OverlayApp:
             metrics = Metrics()
             metrics.temp_hint = state
         is_en = str(self.config.get("ui_language", "zh")) == "en"
-        metrics.fps = self.fps_service.get_display_text()
-        metrics.fps_low_1 = self.fps_service.get_low_display_text()
+        fps = self._fps_snapshot()
+        metrics.fps = fps['fps']
+        metrics.fps_low_1 = fps['fps_low_1']
+        service_errors = self.service_runtime.snapshot()
+        if 'lan' in service_errors:
+            metrics.temp_hint = 'lan_start_failed'
+        elif 'fps' in service_errors:
+            metrics.temp_hint = 'fps_capture_failed'
+        elif fps['error_code']:
+            metrics.temp_hint = fps['error_code']
         target_name = str(self.config.get("fps_target_process", "") or "").strip()
         metrics.target_process = target_name if target_name else "--"
         self.last_metrics = metrics
         self._last_sample_state = state
         # Widgets only need touching when the sample generation, FPS text,
         # freshness state, or language actually changed.
-        signature = (snapshot["sample_generation"], state, snapshot["error_code"], metrics.fps, metrics.fps_low_1, target_name, is_en)
+        signature = (snapshot["sample_generation"], state, metrics.temp_hint, metrics.fps, metrics.fps_low_1, target_name, is_en)
         if signature != self._render_signature:
             self._render_signature = signature
             self._render_metrics(metrics, is_en)
@@ -2474,7 +2560,11 @@ class OverlayApp:
             self._settings_working = {key: (list(value) if isinstance(value, list) else value) for key, value in self.config.items()}
         working = self._settings_working
         try:
-            self.settings_window = tk.Toplevel(self.root)
+            if self.settings_window is None or not self.settings_window.winfo_exists():
+                self.settings_window = tk.Toplevel(self.root)
+            else:
+                for child in self.settings_window.winfo_children():
+                    child.destroy()
         except Exception:
             self.logger.exception("Create settings window failed")
             return
@@ -2511,8 +2601,6 @@ class OverlayApp:
 
         def apply_and_reopen(rebuild: bool = True) -> None:
             preview(rebuild=rebuild)
-            if self.settings_window is not None and self.settings_window.winfo_exists():
-                self.settings_window.destroy()
             self._open_settings_dialog()
 
         self.settings_window.update_idletasks()
@@ -3010,12 +3098,13 @@ class OverlayApp:
             if not self._save_config(candidate):
                 return
             self.config.update(candidate)
+            self._sampling_config = dict(self.config)
             self.root.attributes("-topmost", bool(self.config["always_on_top"]))
             self.root.attributes("-alpha", float(self.config["window_opacity"]))
             pos_x, pos_y = self.config.get("window_x"), self.config.get("window_y")
             if type(pos_x) is int and type(pos_y) is int:
                 self.root.geometry(f"+{pos_x}+{pos_y}")
-            self._apply_fps_config(force_restart=True)
+            self._apply_fps_config()
             self._apply_lan_dashboard_config()
             self._set_autostart(bool(working.get("autostart", False)))
             try:
@@ -3067,18 +3156,34 @@ class OverlayApp:
         enabled = bool(self.config.get("fps_enabled", False))
         target = str(self.config.get("fps_target_process", "") or "")
         self.logger.info("Apply FPS config: enabled=%s target=%s force_restart=%s", enabled, target, force_restart)
-        self.fps_service.configure(enabled=enabled, target_process=target, force_restart=force_restart)
+        requested = (enabled, target)
+        failed = 'fps' in self.service_runtime.snapshot() or self.fps_service.snapshot()['error_code'] == 'fps_capture_failed'
+        if requested == self._requested_fps_config and not force_restart and not failed:
+            return
+        self._requested_fps_config = requested
+        self.service_runtime.submit('fps', lambda: self.fps_service.configure(enabled=enabled, target_process=target, force_restart=force_restart))
 
     def _apply_lan_dashboard_config(self) -> None:
-        if not bool(self.config.get("lan_dashboard_enabled", False)):
-            self.lan_dashboard.stop()
-            return
+        enabled = bool(self.config.get("lan_dashboard_enabled", False))
         port = int(self.config.get("lan_dashboard_port", 8765))
-        if self.lan_dashboard.is_running and self.lan_dashboard.port == port:
-            return
-        self.lan_dashboard.stop()
-        if not self.lan_dashboard.start(port):
-            self.logger.warning("LAN dashboard remains disabled because port %s is unavailable", port)
+        self._requested_lan_config = (enabled, port)
+        if not enabled:
+            # Revoke response permission immediately; socket joins belong to
+            # the service worker, so Save does not wait for slow clients.
+            with self.lan_dashboard._lock:
+                if self.lan_dashboard._server is not None:
+                    self.lan_dashboard._server.active.clear()
+        def apply():
+            if self._stop_event.is_set() or self._requested_lan_config != (enabled, port):
+                return True
+            if enabled and self.lan_dashboard.is_running and self.lan_dashboard.port == port:
+                return True
+            if not self.lan_dashboard.stop():
+                return False
+            if self._stop_event.is_set() or self._requested_lan_config != (enabled, port):
+                return True
+            return self.lan_dashboard.start(port) if enabled else True
+        self.service_runtime.submit('lan', apply)
 
     def _lan_dashboard_address(self, port: int) -> str:
         en = self.config.get("ui_language") == "en"
@@ -3120,9 +3225,9 @@ class OverlayApp:
             self.tray_service = TrayIconService(
                 app_title=APP_NAME,
                 icon_path=icon_path,
-                on_show=lambda: self.root.after(0, self._show_from_tray),
-                on_exit=lambda: self.root.after(0, self._close_now),
-                on_settings=lambda: self.root.after(0, self._toggle_settings),
+                on_show=lambda: self._tray_commands.put('show'),
+                on_exit=lambda: self._tray_commands.put('exit'),
+                on_settings=lambda: self._tray_commands.put('settings'),
             )
             if self.tray_service.start():
                 self.tray_service.show()
@@ -3237,13 +3342,8 @@ class OverlayApp:
             self.diag_window.destroy()
         if self.settings_window is not None and self.settings_window.winfo_exists():
             self.settings_window.destroy()
-        def stop_services():
-            self.fps_service.close()
-            self.lan_dashboard.stop()
-            if self.tray_service is not None:
-                self.tray_service.close()
-        cleanup = threading.Thread(target=stop_services, name="service-shutdown", daemon=True)
-        cleanup.start()
+        self.service_runtime.stop()
+        cleanup = self.service_runtime.thread
         def finish():
             worker = self.sensor_runtime.thread
             if ((worker is not None and worker.is_alive()) or cleanup.is_alive()) and time.monotonic() < shutdown_deadline:
@@ -3255,6 +3355,14 @@ class OverlayApp:
                 self.logger.error("unclean service shutdown")
             self.root.destroy()
         finish()
+
+    def _stop_background_services(self):
+        for service in (self.fps_service, self.lan_dashboard, self.tray_service):
+            if service is not None:
+                try:
+                    service.close() if hasattr(service, 'close') else service.stop()
+                except Exception:
+                    self.logger.exception('Service cleanup failed')
 
 
 def validate_config(raw):

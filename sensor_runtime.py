@@ -42,10 +42,12 @@ class SensorRuntime:
         with self.lock:
             age = None if self.last_success_monotonic is None else max(0, int((self.clock() - self.last_success_monotonic) * 1000))
             state = self.state
-            if state != "stopping" and age is not None and age > max(5000, 3 * self.config_provider()["refresh_interval_ms"]):
+            stale_after = max(5000, 3 * self.config_provider()["refresh_interval_ms"])
+            if state != "stopping" and age is not None and age > stale_after:
                 state = "stale"
             return dict(metrics=asdict(self.metrics), sample_state=state,
                         sample_age_ms=age, sample_generation=self.sample_generation,
+                        sample_stale_after_ms=stale_after,
                         error_code="sample_stale" if state == "stale" else self.error_code,
                         updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.updated_at)) if self.updated_at else "",
                         gpu_devices=list(self.gpus))
@@ -84,6 +86,7 @@ class SensorRuntime:
                 try:
                     if reader is None:
                         reader = self.factory()
+                    sample_started = self.clock()
                     config = dict(self.config_provider())
                     metrics = reader.read_metrics(config)
                     outcomes = getattr(reader, "device_outcomes", {})
@@ -103,7 +106,10 @@ class SensorRuntime:
                         self.gpus = list(getattr(reader, "gpu_devices", []))
                     self._recover_devices(reader)
                     delay = 1
-                    self.stop_event.wait(config["refresh_interval_ms"] / 1000)
+                    interval = config["refresh_interval_ms"] / 1000
+                    remaining = interval - (self.clock() - sample_started)
+                    # Skip missed time instead of burst sampling to catch up.
+                    self.stop_event.wait(remaining if remaining > 0 else interval)
                 except Exception:
                     with self.lock:
                         if self.stop_event.is_set():

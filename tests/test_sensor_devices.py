@@ -41,10 +41,16 @@ class SensorDeviceTests(unittest.TestCase):
         a = 'GPU-a,A,10,50,1000,80,100,8000'
         b = 'GPU-b,B,20,N/A,1200,90,200,24000'
         config = dict(DEFAULT_CONFIG, gpu_device_id='nvidia:GPU-b', show_cpu_temperature=False, show_network_latency=False)
+        outcomes = []
         with patch.object(reader, '_run_cmd', side_effect=[a+'\n'+b, b+'\n'+a, a, b]):
-            samples = [reader.read_metrics(config) for _ in range(4)]
+            samples = []
+            for _ in range(4):
+                samples.append(reader.read_metrics(config))
+                outcomes.append(reader.device_outcomes['selected_gpu'])
         self.assertEqual(['20%', '20%', 'N/A', '20%'], [s.gpu_usage for s in samples])
         self.assertEqual('nvidia:GPU-b', config['gpu_device_id'])
+        self.assertEqual([True, True, False, True], outcomes)
+        self.assertEqual('gpu_device_unavailable', samples[2].temp_hint)
 
     def test_lhm_to_smi_and_back_uses_current_provider(self):
         reader = self.reader()

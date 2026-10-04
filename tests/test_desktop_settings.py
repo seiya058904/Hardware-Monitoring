@@ -7,6 +7,7 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from quiet_desktop import quiet_desktop
 
 from app import (
     DEFAULT_CONFIG,
@@ -111,6 +112,9 @@ class SettingsTransactionTests(unittest.TestCase):
         config = DEFAULT_CONFIG.copy()
         config.update(config_overrides)
         self.root = tk.Tk()
+        quiet = quiet_desktop(self.root)
+        quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
         self.root.report_callback_exception = lambda *args: self.fail(f"tk callback error: {args}")
         self.application = OverlayApp(self.root, config)
         self.addCleanup(self.shutdown)
@@ -137,7 +141,23 @@ class SettingsTransactionTests(unittest.TestCase):
     def open_settings(self):
         self.application._toggle_settings()
         self.root.update()
+        self.assertFalse(self.root.winfo_ismapped())
+        self.assertFalse(self.application.settings_window.winfo_ismapped())
         return self.application.settings_window
+
+    def test_settings_refresh_keeps_window_and_preview_keeps_sampling_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            window = self.open_settings()
+            sampling = self.application._sampling_config
+            self.application._settings_working['theme'] = '石墨灰'
+            self.application._settings_working['show_cpu_temperature'] = False
+            self.application._open_settings_dialog()
+            self.root.update()
+            self.assertIs(window, self.application.settings_window)
+            self.assertIs(sampling, self.application._sampling_config)
+            self.assertTrue(sampling['show_cpu_temperature'])
+            self.assertFalse(window.winfo_ismapped())
 
     def test_cancel_restores_config_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -172,6 +192,7 @@ class SettingsTransactionTests(unittest.TestCase):
             working["fps_enabled"] = True
             working["fps_target_process"] = "game.exe"
             working["theme"] = "极光绿"
+            working["refresh_interval_ms"] = 300
             self.application._open_settings_dialog()
             self.root.update()
             with patch.object(OverlayApp, "_save_config", wraps=self.application._save_config) as save, \
@@ -184,6 +205,8 @@ class SettingsTransactionTests(unittest.TestCase):
             self.assertEqual("极光绿", self.application.config["theme"])
             self.assertTrue(self.application.config["fps_enabled"])
             self.assertEqual("game.exe", self.application.config["fps_target_process"])
+            self.assertEqual(300, self.application._sampling_config['refresh_interval_ms'])
+            self.assertEqual('game.exe', self.application._sampling_config['fps_target_process'])
             saved = json.loads((Path(directory) / "config.json").read_text(encoding="utf-8"))
             self.assertEqual("极光绿", saved["theme"])
             self.assertTrue(saved["fps_enabled"])
@@ -244,7 +267,7 @@ class SettingsTransactionTests(unittest.TestCase):
                     else:
                         find_button(window, '保存').invoke()
                 self.assertEqual(2, error.call_count)
-                fps.assert_called_once_with(force_restart=True)
+                fps.assert_called_once_with()
                 lan.assert_called_once_with()
                 startup.assert_called_once_with(True)
                 saved = json.loads(path.read_text(encoding='utf-8'))
@@ -300,7 +323,7 @@ class SettingsTransactionTests(unittest.TestCase):
             # Minimize must give visible feedback even when the tray is dead.
             application._minimize_clicked()
             self.root.update()
-            self.assertEqual("normal", application.root.state())
+            application.root.deiconify.assert_called()
             self.assertIn("托盘不可用", application.hint_label.cget("text"))
             # Close with close_action=tray degrades to a graceful exit instead
             # of being a silent no-op.
