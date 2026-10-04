@@ -24,6 +24,10 @@ Current stable release: v1.0.12
 
 安装包 SHA-256 / Installer SHA-256：`A7CD3EC21B5B476C1067F174F3F9637D0CCC2AAF8AB6C7D0A093A571E87C2F9E`
 
+本地工程候选版本为 v1.0.13，安装包 `HardwareMonitoring_Setup_v1.0.13.exe` 尚未发布到 GitHub。Windows 实测结果、安装包校验值和验证边界见 [before / after 报告](docs/engineering-upgrade-1.0.13.md)。主要改进为采样节拍、FPS 处理成本、设置与 native 服务的线程边界、设备故障状态及多文件升级清单，默认配置保持不变。
+
+`python -m unittest discover -s tests -v` 中的快速桌面回归默认隐藏真实 Tk 窗口，并屏蔽恢复窗口和抢焦点操作；可见桌面、托盘和安装器验收采用少量持续运行，避免密集弹窗/关闭。
+
 运行时配置和日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。设置窗口采用“保存 / 取消”事务语义：主题、透明度、文字大小、监控项等改动先在窗口上实时预览，只有点击“保存”才写入配置并应用 FPS / 局域网 / 开机自启动等系统级设置；点击“取消”或关闭设置窗口会完整还原。高级设置中的“打开数据目录”直达上述配置目录。悬浮窗位置会被记忆，并在下次启动时自动拉回可见屏幕范围；透明度存在 35% 的下限，避免窗口被调到完全不可见。主窗口标题栏提供采样状态指示：绿色表示实时，黄色表示部分传感器不可用，灰色表示数据过期或暂无数据。固定直接依赖版本、第三方来源和 SHA-256 记录见 `requirements-*.txt`、`THIRD_PARTY_NOTICES.md`；可运行 `powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1` 获取并校验固定版本的二进制依赖。requirements 文件不是包含传递依赖哈希的完整 lock 文件。
 卸载程序默认保留 `%LOCALAPPDATA%\Hardware Monitoring` 中的用户配置和日志；如需彻底清理，请在卸载后手动删除该目录。
 
@@ -55,6 +59,8 @@ v1.0.11 includes an optional Android Termux monitoring node with configuration e
 高级设置中的“监控显卡”保留一个设备的完整指标组。选择保存的是不透明设备 ID，名称只用于展示；设备离线时保留选择。未选择时按设备 ID 确定默认设备。LHM 与 nvidia-smi 的身份不能验证一致时，不跨设备补齐缺失字段。
 
 桌面与 LAN API 共用采样健康状态。`/api/metrics` 保留 `status`、`updated_at`、`metrics`，新增 `sample_state`、`sample_age_ms`、`sample_generation`、`error_code`；`status=ok` 表示响应有效，采样是否可用由 `sample_state` 表达。`ok/degraded` 为新鲜数据（后者有部分故障），`stale/unavailable/stopping` 不代表实时指标。`sample_generation` 在本次运行内随有效样本递增；`sample_age_ms` 使用服务器单调时间。详细本地诊断不通过 API 公开。新版网页及 Termux 不依赖设备间墙钟同步，旧协议才检查时间戳与有限时钟偏差。
+
+v1.0.13 增加可选 `sample_stale_after_ms`，使网页在请求等待期间也按服务端采样期限隐藏旧值；旧服务响应缺少该字段时回退到 5 秒。显示与采样使用已提交的配置，设置预览及取消不改变后台采样。
 
 LAN 默认关闭。启用后最多接受 16 个并发连接，每个连接从接受起有 5 秒总期限；关闭会撤销并回收已接入连接。多网卡地址以 IPv4 候选列表显示，不保证任意手机均可访问。采样停止推进时桌面显示过期；退出最多等待 3 秒，无法取消的 native 调用可能记录 `unclean sampler shutdown`，此时不再从其他线程释放传感器。
 

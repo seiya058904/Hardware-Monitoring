@@ -20,6 +20,8 @@ class InstallTransactionTests(unittest.TestCase):
             source, root = Path(directory) / 'source', Path(directory) / 'installed'
             source.mkdir(); root.mkdir()
             (source / 'Hardware Monitoring.exe').write_bytes(b'fixture v1')
+            (source / 'libs').mkdir()
+            (source / 'libs' / 'sensor.dll').write_bytes(b'fixture library')
             (root / 'personal.txt').write_text('preserve', encoding='utf-8')
             result = self.run_script('Install', root, source)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -30,6 +32,20 @@ class InstallTransactionTests(unittest.TestCase):
             result = self.run_script('Uninstall', root, source)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             self.assertEqual(['personal.txt'], sorted(path.name for path in root.iterdir()))
+
+    def test_invalid_manifest_shape_and_entry_type_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'installed'
+            root.mkdir()
+            personal = root / 'personal.txt'
+            personal.write_text('preserve', encoding='utf-8')
+            manifest = root / 'managed-files.json'
+            for raw in ['"personal.txt"', '{"file":"personal.txt"}', '[42]', '[null]', '[""]']:
+                manifest.write_text(raw, encoding='utf-8')
+                result = self.run_script('Uninstall', root, root)
+                self.assertNotEqual(0, result.returncode, raw)
+                self.assertEqual('preserve', personal.read_text(encoding='utf-8'))
+                self.assertEqual(raw, manifest.read_text(encoding='utf-8'))
 
     def test_manifest_escape_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

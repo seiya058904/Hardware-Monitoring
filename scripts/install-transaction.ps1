@@ -25,7 +25,12 @@ function Digest([string]$path) {
     try { return [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace("-", "") }
     finally { $stream.Dispose(); $hasher.Dispose() }
 }
-function Assert-NoRunningInstance {
+$processScanClock = [Diagnostics.Stopwatch]::StartNew()
+$lastProcessScanMs = -1000
+function Assert-NoRunningInstance([switch]$Force) {
+    # CIM works across 32/64-bit PowerShell. Do not launch a WMI query for
+    # each tiny Tcl/runtime file; file replacement still checks OS locks.
+    if (-not $Force -and ($processScanClock.ElapsedMilliseconds - $script:lastProcessScanMs) -lt 250) { return }
     $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'Hardware Monitoring.exe' OR Name = 'PresentMon.exe'")
     foreach ($process in $processes) {
         if (-not $process.ExecutablePath) { throw 'Cannot verify running process path; retry with administrator permissions' }
@@ -34,6 +39,7 @@ function Assert-NoRunningInstance {
             throw ('Close this installation before continuing: PID ' + $process.ProcessId)
         }
     }
+    $script:lastProcessScanMs = $processScanClock.ElapsedMilliseconds
 }
 $journal = @()
 $backupPath = $null
@@ -42,8 +48,16 @@ try {
     $manifestPath = Resolve-Managed $manifestName
     $oldEntries = @()
     if (Test-Path -LiteralPath $manifestPath) {
-        $oldEntries = @(Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json)
-        foreach ($entry in $oldEntries) { $null = Resolve-Managed $entry }
+        $manifestContents = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8
+        if (-not $manifestContents.TrimStart().StartsWith('[')) { throw 'Managed manifest must be an array' }
+        # Windows PowerShell 5.1 emits the JSON array as one pipeline object.
+        # Expand the decoded value explicitly before path validation/union.
+        $decoded = ConvertFrom-Json -InputObject $manifestContents
+        $oldEntries = @($decoded | ForEach-Object {
+            if ($_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_)) { throw 'Invalid manifest entry' }
+            $null = Resolve-Managed $_
+            $_
+        })
     }
     if ($Mode -eq 'Uninstall') {
         if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'Managed manifest missing; repair this installation before uninstalling' }
@@ -79,7 +93,7 @@ try {
         $journal += [pscustomobject]@{ Target=$target; Backup=$backup; Original=$original; Expected=(Digest $source); Source=$source; Changed=$false }
     }
     foreach ($record in $journal) {
-        Assert-NoRunningInstance
+        Assert-NoRunningInstance -Force:($record.Target -eq $manifestPath)
         if ((Digest $record.Target) -ne $record.Original) { throw 'Concurrent modification before install' }
         $null = New-Item -ItemType Directory -Path (Split-Path -Parent $record.Target) -Force
         $temporary = $record.Target + '.install-' + [guid]::NewGuid().ToString('N')
