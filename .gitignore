@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 
 # PyInstaller build output
 build/
@@ -11,6 +12,9 @@ _internal/
 Hardware Monitoring.exe
 HardwareMonitoring_Setup_*.exe
 *.7z
+
+# Local archived verification evidence
+/archive/verification/
 
 # User runtime files
 config.json

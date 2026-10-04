@@ -16,15 +16,15 @@ With built-in Chinese/English language switching, Hardware Monitoring fits daily
 
 ## 下载 / Downloads
 
-当前正式版本：v1.0.12
-Current stable release: v1.0.12
+当前正式版本：v1.0.13
+Current stable release: v1.0.13
 
-- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.12
-- Windows installer / Windows 安装包：`HardwareMonitoring_Setup_v1.0.12.exe`
+- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.13
+- Windows installer / Windows 安装包：[HardwareMonitoring_Setup_v1.0.13.exe](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.13/HardwareMonitoring_Setup_v1.0.13.exe)
 
-安装包 SHA-256 / Installer SHA-256：`A7CD3EC21B5B476C1067F174F3F9637D0CCC2AAF8AB6C7D0A093A571E87C2F9E`
+安装包 SHA-256 / Installer SHA-256：`4AD00148D3B631A6BE07A0BF68F7D816C773FBF4A0D9EBEB09DAAA9E39F0DBA0`
 
-本地工程候选版本为 v1.0.13，安装包 `HardwareMonitoring_Setup_v1.0.13.exe` 尚未发布到 GitHub。首轮 Windows 实测对照见 [before / after 报告](docs/engineering-upgrade-1.0.13.md)，当前安装包校验值、正式升级和稳定性结果及剩余风险见 [RC 验收报告](docs/release-audit-1.0.13.md)。主要改进为采样节拍、FPS 处理成本、设置与 native 服务的线程边界、设备故障状态及多文件升级清单，默认配置保持不变。
+v1.0.13 已正式发布，GitHub 附件已回下载并核对上述 SHA-256，沿用验收通过的安装包。首轮 Windows 实测对照见 [before / after 报告](docs/engineering-upgrade-1.0.13.md)，正式升级、稳定性结果及剩余风险见 [RC 验收报告](docs/release-audit-1.0.13.md)；报告保留发布前的历史验收记录，当前下载以本节 Release 为准。主要改进为采样节拍、FPS 处理成本、设置与 native 服务的线程边界、设备故障状态及多文件升级清单，默认配置保持不变。
 
 `python -m unittest discover -s tests -v` 中的快速桌面回归默认隐藏真实 Tk 窗口，并屏蔽恢复窗口和抢焦点操作；可见桌面、托盘和安装器验收采用少量持续运行，避免密集弹窗/关闭。
 
