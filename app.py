@@ -1971,6 +1971,18 @@ class TrayIconService:
 
 
 class OverlayApp:
+    class _ProcessEntry32(ctypes.Structure):
+        _fields_ = [('dwSize', ctypes.wintypes.DWORD),
+                    ('cntUsage', ctypes.wintypes.DWORD),
+                    ('th32ProcessID', ctypes.wintypes.DWORD),
+                    ('th32DefaultHeapID', ctypes.c_size_t),
+                    ('th32ModuleID', ctypes.wintypes.DWORD),
+                    ('cntThreads', ctypes.wintypes.DWORD),
+                    ('th32ParentProcessID', ctypes.wintypes.DWORD),
+                    ('pcPriClassBase', ctypes.wintypes.LONG),
+                    ('dwFlags', ctypes.wintypes.DWORD),
+                    ('szExeFile', ctypes.wintypes.WCHAR * 260)]
+
     def __init__(self, root: tk.Tk, config: dict) -> None:
         self.root = root
         self.config = config
@@ -1992,6 +2004,7 @@ class OverlayApp:
         self._last_sample_state = None
         self._settings_original: Optional[dict] = None
         self._settings_working: Optional[dict] = None
+        self._process_names: Optional[tuple[str, ...]] = None
         self.diag_window: Optional[tk.Toplevel] = None
         self.diag_label: Optional[tk.Label] = None
         self.settings_window: Optional[tk.Toplevel] = None
@@ -2958,7 +2971,10 @@ class OverlayApp:
                 fps_state.configure(text=tr("状态：PresentMon 不可用", "Status: PresentMon unavailable"))
                 return
             if process_names is None:
-                process_names = set(self._list_process_names())
+                process_names = self._process_names
+            if process_names is None:
+                fps_state.configure(text=tr("状态：正在读取进程列表", "Status: Loading process list"))
+                return
             if working["fps_target_process"] not in process_names:
                 fps_state.configure(text=tr("状态：等待目标进程启动", "Status: Waiting for the target process"))
                 return
@@ -2968,17 +2984,47 @@ class OverlayApp:
             else:
                 fps_state.configure(text=tr("状态：捕获中", "Status: Capturing"))
 
-        def refresh_process_list() -> None:
-            try:
-                names = self._list_process_names()
-                values = [""] + names
-            except Exception:
-                names = []
-                values = [""]
+        def apply_process_names(names) -> None:
+            values = [""] + list(names or ())
             if process_var.get() and process_var.get() not in values:
                 values.append(process_var.get())
             process_combo["values"] = values
-            refresh_fps_state(process_names=set(names))
+            refresh_fps_state(process_names=names)
+
+        process_refresh_generation = 0
+
+        def refresh_process_list() -> None:
+            nonlocal process_refresh_generation
+            process_refresh_generation += 1
+            generation = process_refresh_generation
+            result = queue.SimpleQueue()
+
+            def read_processes():
+                try:
+                    names = tuple(self._list_process_names())
+                    self._process_names = names
+                    result.put((names, False))
+                except Exception:
+                    self.logger.exception("Read process list failed")
+                    result.put((None, True))
+
+            def poll_result():
+                # A rebuild/Cancel can destroy this combo while enumeration runs.
+                if generation != process_refresh_generation or self._stop_event.is_set() or not process_combo.winfo_exists():
+                    return
+                try:
+                    names, failed = result.get_nowait()
+                except queue.Empty:
+                    self.root.after(100, poll_result)
+                    return
+                if failed:
+                    fps_state.configure(text=tr("状态：进程列表读取失败，请重试", "Status: Could not refresh process list; retry"))
+                else:
+                    apply_process_names(names)
+
+            apply_process_names(self._process_names)
+            self.service_runtime.submit('process-list', read_processes)
+            self.root.after(100, poll_result)
 
         def draw_fps_toggle(v):
             fps_can.delete("all")
@@ -3206,6 +3252,36 @@ class OverlayApp:
         return ("IPv4 candidates (reachability depends on network): " if en else "IPv4 候选（能否访问取决于网络）：") + ("; ".join(candidates) or ("None" if en else "无"))
 
     def _list_process_names(self) -> list[str]:
+        if os.name == 'nt':
+            # Read Unicode image names from one snapshot. psutil.name() can
+            # query every image path while holding the GIL, even on a worker.
+            ProcessEntry = self._ProcessEntry32
+            kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel.CreateToolhelp32Snapshot.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD]
+            kernel.CreateToolhelp32Snapshot.restype = ctypes.wintypes.HANDLE
+            for method in (kernel.Process32FirstW, kernel.Process32NextW):
+                method.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+                method.restype = ctypes.wintypes.BOOL
+            kernel.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+            kernel.CloseHandle.restype = ctypes.wintypes.BOOL
+            handle = kernel.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
+            if handle == ctypes.c_void_p(-1).value:
+                raise ctypes.WinError(ctypes.get_last_error())
+            names = set()
+            try:
+                entry = ProcessEntry(dwSize=ctypes.sizeof(ProcessEntry))
+                available = kernel.Process32FirstW(handle, ctypes.byref(entry))
+                while available:
+                    name = entry.szExeFile.strip()
+                    if name.lower().endswith('.exe'):
+                        names.add(name)
+                    available = kernel.Process32NextW(handle, ctypes.byref(entry))
+                error = ctypes.get_last_error()
+                if error != 18:  # ERROR_NO_MORE_FILES
+                    raise ctypes.WinError(error)
+            finally:
+                kernel.CloseHandle(handle)
+            return sorted(names, key=str.lower)
         names = set()
         for proc in psutil.process_iter(attrs=["name"]):
             try:

@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 import time
 import tkinter as tk
 import unittest
@@ -85,7 +86,29 @@ class LanPageTests(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt", "Windows desktop")
+class ProcessSnapshotTests(unittest.TestCase):
+    def test_current_process_is_listed_and_snapshot_handles_are_released(self):
+        import psutil
+        application = OverlayApp.__new__(OverlayApp)
+        process = psutil.Process()
+        self.assertIn(process.name(), application._list_process_names())
+        handles = process.num_handles()
+        for _ in range(32):
+            self.assertIn(process.name(), application._list_process_names())
+        self.assertLessEqual(process.num_handles(), handles + 2)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows desktop")
 class SettingsTransactionTests(unittest.TestCase):
+    def pump_until(self, predicate, seconds=3):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self.root.update()
+            if predicate():
+                return
+            time.sleep(0.01)
+        self.fail("Asynchronous settings result did not arrive")
+
     def build_app(self, directory, **config_overrides):
         class Reader:
             gpu_devices = [("/gpu/a", "GPU A")]
@@ -158,6 +181,57 @@ class SettingsTransactionTests(unittest.TestCase):
             self.assertIs(sampling, self.application._sampling_config)
             self.assertTrue(sampling['show_cpu_temperature'])
             self.assertFalse(window.winfo_ismapped())
+
+    def test_blocked_process_scan_keeps_tk_responsive_and_cancel_discards_widget_updates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory, fps_target_process="kept.exe")
+            entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+            self.addCleanup(release.set)
+            owners, ticks = [], []
+
+            def blocked_scan():
+                owners.append(threading.get_ident())
+                entered.set()
+                release.wait(3)
+                finished.set()
+                return ["alive.exe"]
+
+            with patch.object(self.application, "_list_process_names", side_effect=blocked_scan):
+                window = self.open_settings()
+                self.assertTrue(entered.wait(1))
+                self.root.after(0, lambda: ticks.append("responsive"))
+                self.root.update()
+                self.assertEqual(["responsive"], ticks)
+                self.assertFalse(release.is_set())
+                # Rebuild and Cancel while the first scan owns a native call.
+                self.application._open_settings_dialog()
+                self.assertIs(window, self.application.settings_window)
+                self.application._cancel_settings()
+                release.set()
+                self.pump_until(finished.is_set)
+                self.root.after(200, lambda: ticks.append("late result"))
+                self.pump_until(lambda: len(ticks) == 2)
+            self.assertTrue(owners)
+            self.assertTrue(all(owner != threading.get_ident() for owner in owners))
+            self.assertIsNone(self.application.settings_window)
+            self.assertEqual("kept.exe", self.application.config["fps_target_process"])
+            self.assertFalse((Path(directory) / "config.json").exists())
+
+    def test_process_scan_error_can_retry_without_losing_selected_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory, fps_target_process="kept.exe")
+            with patch.object(self.application, "_list_process_names", side_effect=[OSError("scan failed"), ["alive.exe"]]):
+                window = self.open_settings()
+                failed = lambda: any(isinstance(child, tk.Label) and "进程列表读取失败" in child.cget("text") for child in settings_iter(window))
+                self.pump_until(failed)
+                find_button(window, "刷新列表").invoke()
+                self.pump_until(lambda: any(child.winfo_class() == "TCombobox" and "alive.exe" in child.cget("values") for child in settings_iter(window)))
+                combos = [child for child in settings_iter(window) if child.winfo_class() == "TCombobox" and "alive.exe" in child.cget("values")]
+                self.assertEqual("kept.exe", combos[0].get())
+                self.assertIn("kept.exe", combos[0].cget("values"))
+                self.assertEqual("kept.exe", self.application._settings_working["fps_target_process"])
+            self.application._cancel_settings()
+            self.assertEqual("kept.exe", self.application.config["fps_target_process"])
 
     def test_cancel_restores_config_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
