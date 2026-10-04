@@ -54,6 +54,11 @@ class DesktopTests(unittest.TestCase):
                 root.update()
                 self.assertEqual('offline-game.exe', application.config['fps_target_process'])
                 self.assertEqual('/gpu/a', application.config['gpu_device_id'])
+                # Let the cancelled settings process-list poll retire before counting timers.
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and len(root.tk.call('after', 'info')) > 1:
+                    root.update()
+                    time.sleep(.01)
                 self.assertEqual(1, len(root.tk.call('after', 'info')))
                 self.assertFalse(errors, errors)
             finally:

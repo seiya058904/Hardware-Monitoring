@@ -284,6 +284,8 @@ class SettingsTransactionTests(unittest.TestCase):
             saved = json.loads((Path(directory) / "config.json").read_text(encoding="utf-8"))
             self.assertEqual("极光绿", saved["theme"])
             self.assertTrue(saved["fps_enabled"])
+            # Settings process-list polling can still be pending after Save.
+            self.pump_until(lambda: len(self.root.tk.call("after", "info")) == 1)
             self.assertEqual(1, len(self.root.tk.call("after", "info")))
 
     def test_config_folder_button_opens_runtime_data_dir(self):
