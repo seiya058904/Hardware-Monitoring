@@ -1,57 +1,46 @@
 # Repository Guidelines
 
-## Project Overview
+## Product and paths
 
-`Hardware Monitoring` is a Windows desktop hardware overlay written in Python with `tkinter`. `app.py` is the single application entry point: it collects metrics, manages PresentMon FPS capture, the tray icon, settings UI, and the opt-in LAN dashboard. Runtime configuration and logs live in `%LOCALAPPDATA%\Hardware Monitoring`.
+Hardware Monitoring is a Windows `tkinter` overlay. `app.py` is the application entry in this Git root, covering metrics, PresentMon FPS capture, tray, settings and opt-in LAN dashboard. User configuration/logs live in `%LOCALAPPDATA%\Hardware Monitoring`; installer version/checksum live in `Hardware Monitoring.nsi` and `README.md`.
 
-The project packages with PyInstaller (`Hardware Monitoring.spec`) and NSIS (`Hardware Monitoring.nsi`). `android/termux/` is an optional, outbound-only Android Termux monitoring node; it is not needed for normal Windows overlay use.
+- `sensor_runtime.py`, `fps_stream.py`, `fps_sessions.py`, `dashboard_server.py`: sampling, FPS streaming/session ownership and bounded LAN serving.
+- `tests/`: Windows/core regressions, including installation transactions.
+- `android/termux/`: optional outbound-only node; follow its README. It is not required for the Windows overlay.
+- `Hardware Monitoring.spec`, `Hardware Monitoring.nsi`, `scripts/install-transaction.ps1`: PyInstaller, NSIS and manifest-based installation.
+- `assets/app.ico`, `third_party/licenses/`, `THIRD_PARTY_NOTICES.md`, `用户须知.txt`: formal package resources.
 
-## Structure and Architecture
+## Run, package and validate
 
-- `app.py`: `SensorReader`, `FpsService`, `TrayIconService`, `LanDashboardService`, and `OverlayApp`. Background workers write locked shared state; Tkinter's timer renders it.
-- `tests/`: standard-library `unittest` coverage for sensor-value filtering, PresentMon restart ownership, and the read-only LAN dashboard.
-- `android/termux/`: node scripts, JSON example configuration, Bash integration tests, and its operational README.
-- `tools/PresentMon/PresentMon.exe` and `_internal/libs/LibreHardwareMonitorLib.dll`: pinned package inputs. Keep their paths and hashes compatible with the spec file.
-- `assets/`, `third_party/licenses/`, and `THIRD_PARTY_NOTICES.md`: bundled application and license materials.
-- `scripts/fetch-dependencies.ps1`: downloads and verifies the pinned binary dependencies.
-
-Generated `build/`, `dist/`, `_internal/`, `__pycache__/`, installers, logs, and local configuration are not source. Do not hand-edit generated package output.
-
-## Development, Build, and Tests
-
-Run commands from the repository root:
+Run from the Git root with versions in `requirements-runtime.txt` / `requirements-build.txt`; do not upgrade dependencies incidentally.
 
 ```powershell
 python app.py
-python app.py --force-admin
-python -m py_compile app.py
+python -m py_compile app.py sensor_runtime.py fps_stream.py fps_sessions.py dashboard_server.py
 python -m unittest discover -s tests -v
 pyinstaller "Hardware Monitoring.spec" --noconfirm
 makensis "Hardware Monitoring.nsi"
-powershell -ExecutionPolicy Bypass -File scripts\fetch-dependencies.ps1
 ```
 
-- Use `python -m py_compile app.py` as the minimum syntax check after Python changes.
-- Run the relevant `unittest` suite for FPS, sensor, or LAN-dashboard behavior. UI, tray, packaging, or Windows-path changes also need a manual Windows run of `python app.py` or the packaged EXE.
-- Termux scripts are Bash-based; run their matching files under `android/termux/tests/` only in a compatible Bash/Termux environment.
-- `.github/workflows/ci.yml` runs py_compile plus the unittest suite on a Windows runner. It is verification only; release/build automation is intentionally not wired to CI.
+Packaging needs PyInstaller and NSIS; NSIS consumes `dist\Hardware Monitoring`. `--force-admin` is optional. Desktop, tray or packaging changes also require real Windows startup/exit verification of the affected source or EXE.
 
-## Coding and Data Rules
+`.github/workflows/ci.yml` runs syntax/core tests on Windows with Python 3.12. Its Ubuntu job runs `python -m unittest discover -s android/termux/tests -v` and `bash android/termux/tests/test_boot.sh`. Use compatible Linux/Bash for these contracts; they do not establish Android-device acceptance. CI does not build installers, publish Releases or deploy Pages.
 
-- Follow the existing Python style: four-space indentation, standard library first, small local changes, and `tr(zh, en)` for new visible UI text.
-- Preserve config keys, metric names, defaults, and the Windows behavior unless the requested change explicitly alters them. Keep `lan_dashboard_enabled` default-off; its HTTP endpoints are read-only and must not become remote control or public exposure.
-- Keep worker-owned state synchronized; do not update Tkinter widgets from a background thread.
-- Preserve the Termux node's private configuration and outbound-only boundary. Never add credentials to `config.example.json` or repository files.
+## Build inputs and cleanup
 
-## Packaging and Security
+`tools/PresentMon/PresentMon.exe` and `_internal/libs/LibreHardwareMonitorLib.dll` are pinned inputs checked by SHA-256 in the spec. **The ignored `_internal/libs` DLL is a canonical build input; preserve it during cache cleanup.** `scripts/fetch-dependencies.ps1` downloads/verifies those binaries when acquisition is authorized.
 
-- Do not change pinned binaries, their checksums, the PyInstaller spec, or NSIS installer behavior without a packaging-specific review and verification.
-- Never commit credentials, private keys, keystores, local config, logs, build outputs, or temporary files. Treat network exposure, permissions, signing, release publication, and destructive cleanup as high-risk actions requiring explicit authorization.
-- The uninstaller intentionally preserves `%LOCALAPPDATA%\Hardware Monitoring`; do not change user-data retention without explicit approval.
+`build/`, `dist/` and `__pycache__/` are generated. Ignored installers/root EXE still require version, uniqueness and historical-value checks before deletion. Local historical installers are retained in ignored `archive/installers/` as documented in README; they are not build inputs and may be absent in a fresh clone. Preserve personal config, local notes and uncertain files; do not commit secrets, logs or generated output.
 
-## Commits, PRs, and Agent Boundaries
+## Invariants
 
-- Recent history uses short imperative, single-purpose commit subjects. Keep commits scoped and describe the behavior changed.
-- Before editing, read the affected code and trace its callers. Do not refactor unrelated code or overwrite existing user changes.
-- Before committing, run only the relevant checks, inspect `git diff --check`, `git diff --stat`, and `git status --short`, and verify that staging contains only intended files.
-- Do not install or update dependencies, commit, push, deploy, publish, merge, rebase, alter production settings, or perform bulk deletion unless the user explicitly authorizes that action.
+- Preserve config keys, metric names, defaults and Windows behavior. Settings save/cancel stays transactional; uninstall retains the user's runtime directory.
+- Workers publish synchronized state; only Tkinter's thread updates widgets. Do not release native sensors from another thread while sampling is blocked.
+- LAN is default-off and read-only with bounded connections/shutdown. Do not introduce remote control, public exposure or automatic firewall changes.
+- PresentMon ownership is scoped to this application's sessions. Upgrade/uninstall manages manifest-listed files, never unrelated processes or user data.
+- Termux stays outbound-only; `config.example.json` and tracked files must contain no secrets.
+- Use four-space Python, standard-library-first imports and `tr(zh, en)` for visible desktop text.
+
+## Changes and commits
+
+Read affected code/callers, preserve existing work and avoid unrelated refactors. Changes to pinned binaries, checksums or installer behavior need packaging review and verification. Run proportionate checks; inspect `git diff --check`, staged diff and status. Keep commits single-purpose. External side effects and destructive cleanup require user authorization; hygiene work must preserve Git history and formal tags/Releases.
