@@ -1360,6 +1360,8 @@ class FpsService:
                 need_restart = True
             elif (not prev_enabled and self._enabled) or (prev_target != self._target_process):
                 need_restart = True
+            elif self._capture_needs_retry_locked():
+                need_restart = True
 
         if not self._enabled or not self._target_process:
             self.stop()
@@ -1376,6 +1378,18 @@ class FpsService:
         self._active_presentmon_path = resolved
         if need_restart:
             self.restart()
+
+    def _capture_needs_retry_locked(self) -> bool:
+        return bool(self._enabled and self._target_process and (
+            self._error_code == 'fps_capture_failed'
+            or self._stop_event.is_set()
+            or self._worker_thread is None
+            or not self._worker_thread.is_alive()
+        ))
+
+    def needs_retry(self) -> bool:
+        with self._lock:
+            return self._capture_needs_retry_locked()
 
     def _presentmon_candidates(self) -> list[Path]:
         candidates = [
@@ -1530,7 +1544,7 @@ class FpsService:
             return
         if proc is None or proc.stdout is None:
             with self._lock:
-                if self._enabled and self._target_process:
+                if generation == self._generation and not self._stop_event.is_set() and self._enabled and self._target_process:
                     self._display_text = self._low_display_text = "不可用"
                     self._error_code = 'fps_capture_failed'
                     self._low_dirty = False
@@ -3203,7 +3217,7 @@ class OverlayApp:
         target = str(self.config.get("fps_target_process", "") or "")
         self.logger.info("Apply FPS config: enabled=%s target=%s force_restart=%s", enabled, target, force_restart)
         requested = (enabled, target)
-        failed = 'fps' in self.service_runtime.snapshot() or self.fps_service.snapshot()['error_code'] == 'fps_capture_failed'
+        failed = 'fps' in self.service_runtime.snapshot() or self.fps_service.needs_retry()
         if requested == self._requested_fps_config and not force_restart and not failed:
             return
         self._requested_fps_config = requested

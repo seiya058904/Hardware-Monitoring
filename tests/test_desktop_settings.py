@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from quiet_desktop import quiet_desktop
+from test_fps_service import FakeProcess
 
 from app import (
     DEFAULT_CONFIG,
@@ -16,6 +17,7 @@ from app import (
     Metrics,
     OverlayApp,
     LanDashboardService,
+    FpsService,
     clamp_window_position,
     validate_config,
 )
@@ -167,6 +169,40 @@ class SettingsTransactionTests(unittest.TestCase):
         self.assertFalse(self.root.winfo_ismapped())
         self.assertFalse(self.application.settings_window.winfo_ismapped())
         return self.application.settings_window
+
+    def test_same_target_save_recovers_failed_fps_and_cancel_keeps_healthy_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            healthy = FakeProcess()
+            with patch.object(FpsService, '_resolve_presentmon_path', return_value=Path('PresentMon.exe')), \
+                 patch.object(FpsService, '_spawn', side_effect=[None, healthy]) as spawn:
+                self.build_app(directory, fps_enabled=True, fps_target_process='game.exe')
+                fps = self.application.fps_service
+                self.pump_until(lambda: fps.snapshot()['error_code'] == 'fps_capture_failed')
+                self.assertEqual(1, spawn.call_count)
+                self.open_settings()
+                find_button(self.application.settings_window, '保存').invoke()
+                self.pump_until(lambda: fps._proc is healthy)
+                self.assertEqual(2, spawn.call_count)
+                self.assertEqual('', fps.snapshot()['error_code'])
+                self.open_settings()
+                find_button(self.application.settings_window, '保存').invoke()
+                self.open_settings()
+                self.application._settings_working['fps_target_process'] = 'cancelled.exe'
+                find_button(self.application.settings_window, '取消').invoke()
+                drained = threading.Event()
+                self.application.service_runtime.submit('test-barrier', drained.set)
+                self.pump_until(drained.is_set)
+                self.assertEqual(2, spawn.call_count)
+                self.assertFalse(healthy.terminated)
+                self.assertEqual('game.exe', fps.snapshot()['target_process'])
+                # Disabling revokes the old capture before it can publish.
+                generation, capture = fps._generation, fps._capture
+                self.application.config['fps_enabled'] = False
+                self.application._apply_fps_config()
+                self.pump_until(lambda: healthy.terminated)
+                fps._consume_line('stale frame', generation, capture)
+                self.assertEqual('关闭', fps.snapshot()['fps'])
+                self.assertEqual('', fps.snapshot()['error_code'])
 
     def test_settings_refresh_keeps_window_and_preview_keeps_sampling_config(self):
         with tempfile.TemporaryDirectory() as directory:
