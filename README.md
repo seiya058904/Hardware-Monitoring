@@ -16,15 +16,17 @@ With built-in Chinese/English language switching, Hardware Monitoring fits daily
 
 ## 下载 / Downloads
 
-当前正式版本：v1.0.13
-Current stable release: v1.0.13
+当前正式版本：v1.0.14
+Current stable release: v1.0.14
 
-- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.13
-- Windows installer / Windows 安装包：[HardwareMonitoring_Setup_v1.0.13.exe](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.13/HardwareMonitoring_Setup_v1.0.13.exe)
+- Release notes / 发布说明：https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.14
+- Windows installer / Windows 安装包：[HardwareMonitoring_Setup_v1.0.14.exe](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.14/HardwareMonitoring_Setup_v1.0.14.exe)
 
-安装包 SHA-256 / Installer SHA-256：`4AD00148D3B631A6BE07A0BF68F7D816C773FBF4A0D9EBEB09DAAA9E39F0DBA0`
+安装包 SHA-256 / Installer SHA-256：`FE50184FCB235883FF0C28B056FBD5C7BC9E5EA01BA312C65903477C942E81C4`
 
-v1.0.13 已正式发布，GitHub 附件已回下载并核对上述 SHA-256，沿用验收通过的安装包。首轮 Windows 实测对照见 [before / after 报告](docs/engineering-upgrade-1.0.13.md)，正式升级、稳定性结果及剩余风险见 [RC 验收报告](docs/release-audit-1.0.13.md)；报告保留发布前的历史验收记录，当前下载以本节 Release 为准。主要改进为采样节拍、FPS 处理成本、设置与 native 服务的线程边界、设备故障状态及多文件升级清单，默认配置保持不变。
+v1.0.14 修复 Windows 工作区查询：使用正确的 Win32 结构、句柄类型和最近屏幕常量，保留左侧/上方副屏的负坐标，并按所选工作区调整大字体、多指标悬浮窗的紧凑布局、尺寸和位置。原生 API 失败时仍使用安全备用布局。新增回归覆盖真实 Windows 主屏 API、150%/200% DPI 与负坐标夹具；本机实测为 64 位 Windows、175% DPI 单屏，未声称物理负坐标副屏或 32 位系统实测通过。
+
+v1.0.13 的安装包及历史验收保持原样。首轮 Windows 实测对照见 [before / after 报告](docs/engineering-upgrade-1.0.13.md)，正式升级、稳定性结果及剩余风险见 [RC 验收报告](docs/release-audit-1.0.13.md)。主要改进为采样节拍、FPS 处理成本、设置与 native 服务的线程边界、设备故障状态及多文件升级清单，默认配置保持不变。
 
 `python -m unittest discover -s tests -v` 中的快速桌面回归默认隐藏真实 Tk 窗口，并屏蔽恢复窗口和抢焦点操作；可见桌面、托盘和安装器验收采用少量持续运行，避免密集弹窗/关闭。
 

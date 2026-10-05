@@ -262,6 +262,18 @@ PREVIEW_KEYS = frozenset(
 )
 
 
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.DWORD),
+        ("rcMonitor", ctypes.wintypes.RECT),
+        ("rcWork", ctypes.wintypes.RECT),
+        ("dwFlags", ctypes.wintypes.DWORD),
+    ]
+
+
+MONITOR_DEFAULTTONEAREST = 2
+
+
 def clamp_window_position(x, y, width, height, bounds):
     """Keep a remembered window position reachable on the current monitors."""
     left, top, right, bottom = bounds
@@ -2096,12 +2108,18 @@ class OverlayApp:
         """Work area of the monitor containing the given point, if available."""
         try:
             user32 = ctypes.windll.user32
-            point = ctypes.wintypes.POINT(max(0, int(x)), max(0, int(y)))
-            monitor = user32.MonitorFromPoint(point, 1)  # MONITOR_DEFAULTTONEAREST
-            info = ctypes.wintypes.MONITORINFO()
+            user32.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
+            user32.MonitorFromPoint.restype = ctypes.wintypes.HANDLE
+            user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
+            user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
+            point = ctypes.wintypes.POINT(int(x), int(y))
+            monitor = user32.MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST)
+            info = MONITORINFO()
             info.cbSize = ctypes.sizeof(info)
             if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-                return info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom
+                area = info.rcWork
+                if area.right > area.left and area.bottom > area.top:
+                    return area.left, area.top, area.right, area.bottom
         except Exception:
             pass
         return None
@@ -2160,6 +2178,8 @@ class OverlayApp:
         # Try normal spacing first; if the content cannot fit the monitor work
         # area, rebuild once with tight spacing before clamping the height.
         available_h = None
+        # Apply the remembered geometry before selecting its monitor.
+        self.root.update_idletasks()
         area = self._monitor_workarea(self.root.winfo_x(), self.root.winfo_y())
         if area is not None:
             available_h = area[3] - area[1] - 24
@@ -2188,7 +2208,11 @@ class OverlayApp:
             final_w = max(320, final_w)
         else:
             final_w = max(320, needed_w)
-        self.root.geometry(f"{max(320, final_w)}x{max(220, final_h)}+{self.root.winfo_x()}+{self.root.winfo_y()}")
+        final_w, final_h = max(320, final_w), max(220, final_h)
+        pos_x, pos_y = self.root.winfo_x(), self.root.winfo_y()
+        if area is not None:
+            pos_x, pos_y = clamp_window_position(pos_x, pos_y, final_w, final_h, area)
+        self.root.geometry(f"{final_w}x{final_h}+{pos_x}+{pos_y}")
 
         # Render the last known values immediately so a rebuild never flashes "--".
         self._render_metrics(self.last_metrics, is_en, force=True)
