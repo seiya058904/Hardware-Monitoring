@@ -38,6 +38,7 @@ FPS settings regressions use real Windows Tk callbacks with synthetic capture pr
 ## Invariants
 
 - Preserve config keys, metric names, defaults and Windows behavior. Settings save/cancel stays transactional; uninstall retains the user's runtime directory.
+- Monitor work areas use an explicit Win32 `MONITORINFO` and pointer-sized handles. Keep signed virtual-screen coordinates, apply Tk geometry before selecting the monitor, and clamp the final overlay to that work area; native API failures retain the fallback layout. Use hidden Tk regressions for negative monitors and DPI fixtures, and distinguish them from physical multi-monitor acceptance.
 - Workers publish synchronized state; only Tkinter's thread updates widgets. Do not release native sensors from another thread while sampling is blocked.
 - FPS/LAN configuration runs through `ServiceRuntime`, off Tk. Same-target FPS saves retry a failed or ended capture but do not restart a healthy one; frame and failure publication must respect the active generation and cancellation state.
 - LAN is default-off and read-only with bounded connections/shutdown. Do not introduce remote control, public exposure or automatic firewall changes.
