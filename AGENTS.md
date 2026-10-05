@@ -5,6 +5,7 @@
 Hardware Monitoring is a Windows `tkinter` overlay. `app.py` is the application entry in this Git root, covering metrics, PresentMon FPS capture, tray, settings and opt-in LAN dashboard. User configuration/logs live in `%LOCALAPPDATA%\Hardware Monitoring`; installer version/checksum live in `Hardware Monitoring.nsi` and `README.md`.
 
 - `sensor_runtime.py`, `fps_stream.py`, `fps_sessions.py`, `dashboard_server.py`: sampling, FPS streaming/session ownership and bounded LAN serving.
+- `service_runtime.py`: serializes native service changes off Tk and coalesces pending requests.
 - `tests/`: Windows/core regressions, including installation transactions.
 - `android/termux/`: optional outbound-only node; follow its README. It is not required for the Windows overlay.
 - `Hardware Monitoring.spec`, `Hardware Monitoring.nsi`, `scripts/install-transaction.ps1`: PyInstaller, NSIS and manifest-based installation.
@@ -16,7 +17,7 @@ Run from the Git root with versions in `requirements-runtime.txt` / `requirement
 
 ```powershell
 python app.py
-python -m py_compile app.py sensor_runtime.py fps_stream.py fps_sessions.py dashboard_server.py
+python -m py_compile app.py sensor_runtime.py service_runtime.py fps_stream.py fps_sessions.py dashboard_server.py
 python -m unittest discover -s tests -v
 pyinstaller "Hardware Monitoring.spec" --noconfirm
 makensis "Hardware Monitoring.nsi"
@@ -25,6 +26,8 @@ makensis "Hardware Monitoring.nsi"
 Packaging needs PyInstaller and NSIS; NSIS consumes `dist\Hardware Monitoring`. `--force-admin` is optional. Desktop, tray or packaging changes also require real Windows startup/exit verification of the affected source or EXE.
 
 `.github/workflows/ci.yml` runs syntax/core tests on Windows with Python 3.12. Its Ubuntu job runs `python -m unittest discover -s android/termux/tests -v` and `bash android/termux/tests/test_boot.sh`. Use compatible Linux/Bash for these contracts; they do not establish Android-device acceptance. CI does not build installers, publish Releases or deploy Pages.
+
+FPS settings regressions use real Windows Tk callbacks with synthetic capture processes; successful ETW/PresentMon hardware capture requires separate validation.
 
 ## Build inputs and cleanup
 
@@ -36,6 +39,7 @@ Packaging needs PyInstaller and NSIS; NSIS consumes `dist\Hardware Monitoring`. 
 
 - Preserve config keys, metric names, defaults and Windows behavior. Settings save/cancel stays transactional; uninstall retains the user's runtime directory.
 - Workers publish synchronized state; only Tkinter's thread updates widgets. Do not release native sensors from another thread while sampling is blocked.
+- FPS/LAN configuration runs through `ServiceRuntime`, off Tk. Same-target FPS saves retry a failed or ended capture but do not restart a healthy one; frame and failure publication must respect the active generation and cancellation state.
 - LAN is default-off and read-only with bounded connections/shutdown. Do not introduce remote control, public exposure or automatic firewall changes.
 - PresentMon ownership is scoped to this application's sessions. Upgrade/uninstall manages manifest-listed files, never unrelated processes or user data.
 - Termux stays outbound-only; `android/termux/config.example.json` and tracked files must contain no secrets.
