@@ -1,20 +1,15 @@
-<div align="center">
-
 # Hardware Monitoring
 
 **A quieter way to see what your Windows PC is doing.**
 
 轻量 Windows 实时硬件监控悬浮窗，专注于清楚、稳定地呈现关键性能指标。
 
-[**Download for Windows**](https://github.com/seiya058904/Hardware-Monitoring/releases/latest) · [Source](app.py) · [Android node](android/termux/README.md) · [Engineering notes](docs/engineering-upgrade-1.0.13.md)
+**[⬇️ Download for Windows](https://github.com/seiya058904/Hardware-Monitoring/releases/latest)** · [Features](#what-it-monitors) · [LAN dashboard](#on-another-screen) · [Android node](android/termux/README.md) · [For developers](#development-and-verification)
 
-![Windows](https://img.shields.io/badge/platform-Windows-2378c8?style=flat-square) ![Python](https://img.shields.io/badge/core-Python-3776AB?style=flat-square)
+<img width="680" alt="Hardware Monitoring — project overview" src="https://github.com/user-attachments/assets/11b6ff6b-830c-418a-89f9-98d1758eaa25" />
 
-<img width="680" alt="Hardware Monitoring project artwork" src="https://github.com/user-attachments/assets/11b6ff6b-830c-418a-89f9-98d1758eaa25" />
 
-</div>
-
-## ✨ At a glance / 核心功能
+## What it monitors
 
 | Monitor / 监控 | Experience / 使用体验 |
 | --- | --- |
@@ -27,17 +22,17 @@
 
 > 不同硬件、驱动和采样工具能够提供的数据并不相同。不可用的指标会明确呈现状态，不应被视作零值。
 
-## 📥 Download & start / 下载与使用
+## Download and setup · 下载与使用
 
-**普通用户**请使用 [GitHub Releases](https://github.com/seiya058904/Hardware-Monitoring/releases/latest) 中的 Windows 安装包。仓库 README 原先记录的安装包为 [v1.0.14](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.14/HardwareMonitoring_Setup_v1.0.14.exe)；请以 Release 页面核实实际可下载的最新版本。
-
-安装后启动应用，在悬浮窗中查看采样状态；进入设置可以调整显示内容、文字大小、透明度、刷新周期、目标显卡和 FPS 监控。设置支持保存/取消：**预览不等于提交**，取消时会还原。
+1. 从 [Releases](https://github.com/seiya058904/Hardware-Monitoring/releases/latest) 下载面向 Windows 的正式安装包（历史版本：[v1.0.14](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.14/HardwareMonitoring_Setup_v1.0.14.exe)）。
+2. 启动悬浮窗，确认采样状态。某些传感器不可用时，界面会区分缺失和过期数据。
+3. 在设置中按需启用 FPS、选择显卡、调整刷新周期和窗口外观。**保存**才应用持久配置；取消则回滚预览。
 
 用户配置与日志保存在 `%LOCALAPPDATA%\Hardware Monitoring`。卸载默认保留这些数据，以免意外丢失配置。
 
-## 📱 LAN dashboard / 手机局域网看板
+## On another screen
 
-在 Windows 应用的高级设置中**主动启用**局域网仪表盘后，可以使用同一可信 Wi-Fi 下手机浏览器打开设置中显示的地址，默认端口 `8765`。
+Hardware Monitoring 以 Windows 本机悬浮窗为主。需要在手机查看时，再到高级设置**主动启用**局域网仪表盘；手机与电脑须在同一可信网络下，使用应用显示的地址（默认端口 `8765`）。
 
 <table>
 <tr>
@@ -53,7 +48,7 @@
 
 可选的 [Android Termux 节点](android/termux/README.md) 用于 Android 端监控场景。**仅使用 Windows 悬浮窗时无需安装。**
 
-## 🛠️ For developers / 开发与验证
+## Development and verification
 
 | Location | Responsibility |
 | --- | --- |
@@ -71,8 +66,8 @@ python -m unittest discover -s tests -v
 
 固定的直接依赖和第三方来源见 [`requirements-runtime.txt`](requirements-runtime.txt)、[`requirements-build.txt`](requirements-build.txt) 与 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。必要的二进制依赖可以按仓库脚本获取及校验；不要将 requirements 误认为完整的传递依赖哈希锁文件。
 
-测试与工程依据：[1.0.13 engineering upgrade](docs/engineering-upgrade-1.0.13.md) · [Release candidate audit](docs/release-audit-1.0.13.md) · [Agent guide](AGENTS.md)。
+**Further reading:** [1.0.13 engineering upgrade](docs/engineering-upgrade-1.0.13.md) · [Release candidate audit](docs/release-audit-1.0.13.md) · [Agent guide](AGENTS.md)。
 
-## Scope & notices
+## Data boundaries and notices
 
 Hardware Monitoring 是面向本机观察的工具，不代替专业硬件诊断。请勿将局域网接口直接暴露到公网。第三方组件的许可与来源以仓库内的实际 notices 为准；不要推断整个项目具有未声明的许可证。
