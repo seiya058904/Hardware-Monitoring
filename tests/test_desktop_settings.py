@@ -473,7 +473,10 @@ class SettingsTransactionTests(unittest.TestCase):
             working["autostart"] = True
             self.application._open_settings_dialog()
             self.root.update()
-            with patch.object(OverlayApp, "_set_autostart", return_value=False) as startup:
+            # The rework makes the observed read-back unconditional; stub it so
+            # the test stays hermetic (desired=True, observed=False → reported).
+            with patch.object(OverlayApp, "_set_autostart", return_value=False) as startup, \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=False, create=True):
                 find_button(self.application.settings_window, "保存").invoke()
                 self.root.update()
                 startup.assert_called_once_with(True)
