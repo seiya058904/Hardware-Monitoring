@@ -496,12 +496,48 @@ class SettingsTransactionTests(unittest.TestCase):
             self.application._settings_working["autostart"] = False
             self.application._open_settings_dialog()
             self.root.update()
-            with patch.object(OverlayApp, "_set_autostart", return_value=False) as startup:
+            # The write fails AND the Run-key value is still present: a clear
+            # mismatch must be reported, not softened.
+            with patch.object(OverlayApp, "_set_autostart", return_value=False) as startup, \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=True, create=True):
                 find_button(self.application.settings_window, "保存").invoke()
                 self.root.update()
                 startup.assert_called_once_with(False)
             self.assertFalse(self.application.config["autostart"])
             self.assertIn("未能生效", self.application.hint_label.cget("text"))
+
+    def test_autostart_disable_failure_with_already_desired_registry_is_not_reported(self):
+        # F-5: a failed write must not hide an already-desired state. The goal
+        # (no Run-key value) is observably reached, so "未能生效" would be a lie.
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory, autostart=True)
+            self.application.config["autostart"] = True
+            self.open_settings()
+            self.application._settings_working["autostart"] = False
+            self.application._open_settings_dialog()
+            self.root.update()
+            with patch.object(OverlayApp, "_set_autostart", return_value=False), \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=False, create=True):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+            self.assertFalse(self.application.config["autostart"])
+            self.assertEqual("", self.application.hint_label.cget("text"))
+
+    def test_autostart_confirmed_mismatch_is_reported_as_not_applied(self):
+        # F-5: the write claims success but the read-back clearly disagrees —
+        # that is a known mismatch ("未能生效"), never "无法确认".
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            self.open_settings()
+            self.application._settings_working["autostart"] = True
+            self.application._open_settings_dialog()
+            self.root.update()
+            with patch.object(OverlayApp, "_set_autostart", return_value=True), \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=False, create=True):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+            self.assertIn("未能生效", self.application.hint_label.cget("text"))
+            self.assertNotIn("无法确认", self.application.hint_label.cget("text"))
 
     def test_autostart_write_without_confirmed_readback_is_not_reported_as_applied(self):
         with tempfile.TemporaryDirectory() as directory:
