@@ -3190,12 +3190,27 @@ class OverlayApp:
                 self.root.geometry(f"+{pos_x}+{pos_y}")
             self._apply_fps_config()
             self._apply_lan_dashboard_config()
-            self._set_autostart(bool(working.get("autostart", False)))
+            autostart_desired = bool(working.get("autostart", False))
+            autostart_applied = self._set_autostart(autostart_desired)
+            # Distinguish the desired configuration from the observed registry
+            # state: a write without a confirming read-back must not be
+            # reported as an applied autostart setting.
+            autostart_confirmed = autostart_applied and self._query_autostart_state() is autostart_desired
             try:
                 self.logger.setLevel(getattr(logging, str(working.get("log_level", "INFO")), logging.INFO))
             except Exception:
                 pass
             self._rebuild_ui_fast()
+            if not autostart_applied:
+                self._show_sticky_hint(tr(
+                    "其他设置已保存，但开机自启未能生效；可重新打开设置重试",
+                    "Other settings were saved, but Start with Windows could not be applied; reopen Settings to retry",
+                ))
+            elif not autostart_confirmed:
+                self._show_sticky_hint(tr(
+                    "其他设置已保存，但无法确认开机自启状态",
+                    "Other settings were saved, but the Start with Windows state could not be confirmed",
+                ))
             self._close_settings_dialog()
 
         tk.Button(btn_row, text=tr("保存", "Save"), relief="flat", bd=0, padx=0, pady=px(10), cursor="hand2", bg=accent,
@@ -3426,7 +3441,8 @@ class OverlayApp:
         except Exception:
             return False
 
-    def _is_autostart_enabled(self) -> bool:
+    def _query_autostart_state(self) -> Optional[bool]:
+        """Observed Run-key state: True/False, or None when it cannot be read."""
         if winreg is None:
             return False
         try:
@@ -3439,7 +3455,10 @@ class OverlayApp:
                         pass
                 return False
         except Exception:
-            return False
+            return None
+
+    def _is_autostart_enabled(self) -> bool:
+        return self._query_autostart_state() is True
 
     def _close_now(self) -> None:
         if self._stop_event.is_set():
