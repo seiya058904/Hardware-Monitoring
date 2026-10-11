@@ -3190,12 +3190,33 @@ class OverlayApp:
                 self.root.geometry(f"+{pos_x}+{pos_y}")
             self._apply_fps_config()
             self._apply_lan_dashboard_config()
-            self._set_autostart(bool(working.get("autostart", False)))
+            autostart_desired = bool(working.get("autostart", False))
+            autostart_applied = self._set_autostart(autostart_desired)
+            # F-5: read the observed Run-key state independently of the write
+            # result and report the three truthful outcomes — matched (no hint),
+            # clear mismatch ("未能生效"), unreadable ("无法确认"). A failed
+            # write must not hide an already-desired state, and a confirmed
+            # mismatch must not be softened into "cannot confirm".
+            autostart_observed = self._query_autostart_state()
             try:
                 self.logger.setLevel(getattr(logging, str(working.get("log_level", "INFO")), logging.INFO))
             except Exception:
                 pass
+            self.logger.debug(
+                "autostart save: desired=%s applied=%s observed=%s",
+                autostart_desired, autostart_applied, autostart_observed,
+            )
             self._rebuild_ui_fast()
+            if autostart_observed is None:
+                self._show_sticky_hint(tr(
+                    "其他设置已保存，但无法确认开机自启状态",
+                    "Other settings were saved, but the Start with Windows state could not be confirmed",
+                ))
+            elif autostart_observed is not autostart_desired:
+                self._show_sticky_hint(tr(
+                    "其他设置已保存，但开机自启未能生效；可重新打开设置重试",
+                    "Other settings were saved, but Start with Windows could not be applied; reopen Settings to retry",
+                ))
             self._close_settings_dialog()
 
         tk.Button(btn_row, text=tr("保存", "Save"), relief="flat", bd=0, padx=0, pady=px(10), cursor="hand2", bg=accent,
@@ -3426,9 +3447,10 @@ class OverlayApp:
         except Exception:
             return False
 
-    def _is_autostart_enabled(self) -> bool:
+    def _query_autostart_state(self) -> Optional[bool]:
+        """Observed Run-key state: True/False, or None when it cannot be read."""
         if winreg is None:
-            return False
+            return None
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ) as key:
                 for value_name in (AUTOSTART_VALUE_NAME, LEGACY_AUTOSTART_VALUE_NAME):
@@ -3439,7 +3461,10 @@ class OverlayApp:
                         pass
                 return False
         except Exception:
-            return False
+            return None
+
+    def _is_autostart_enabled(self) -> bool:
+        return self._query_autostart_state() is True
 
     def _close_now(self) -> None:
         if self._stop_event.is_set():

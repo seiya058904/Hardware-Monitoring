@@ -128,6 +128,7 @@ class SettingsTransactionTests(unittest.TestCase):
             patch("app.runtime_data_dir", return_value=Path(directory)),
             patch.object(OverlayApp, "_setup_tray"),
             patch.object(OverlayApp, "_is_autostart_enabled", return_value=False),
+            patch.object(OverlayApp, "_query_autostart_state", return_value=False, create=True),
             patch.object(OverlayApp, "_set_autostart", return_value=True),
             patch.object(OverlayApp, "_list_process_names", return_value=[]),
         ]
@@ -462,6 +463,127 @@ class SettingsTransactionTests(unittest.TestCase):
             with patch.object(OverlayApp, "_close_now") as close_now:
                 application._on_close_clicked()
                 close_now.assert_not_called()
+
+    def test_autostart_failure_reports_partial_success_with_retry_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            self.open_settings()
+            working = self.application._settings_working
+            working["theme"] = "极光绿"
+            working["autostart"] = True
+            self.application._open_settings_dialog()
+            self.root.update()
+            # The rework makes the observed read-back unconditional; stub it so
+            # the test stays hermetic (desired=True, observed=False → reported).
+            with patch.object(OverlayApp, "_set_autostart", return_value=False) as startup, \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=False, create=True):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+                startup.assert_called_once_with(True)
+            # Other settings are saved transactionally.
+            saved = json.loads((Path(directory) / "config.json").read_text(encoding="utf-8"))
+            self.assertTrue(saved["autostart"])
+            self.assertEqual("极光绿", saved["theme"])
+            self.assertEqual("极光绿", self.application.config["theme"])
+            self.assertTrue(self.application.config["autostart"])
+            # The dialog closes, but the unapplied autostart is surfaced and
+            # the settings entry point stays available as the retry path.
+            self.assertIsNone(self.application.settings_window)
+            self.assertIn("未能生效", self.application.hint_label.cget("text"))
+
+    def test_autostart_disable_failure_is_reported_too(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory, autostart=True)
+            self.application.config["autostart"] = True
+            self.open_settings()
+            self.application._settings_working["autostart"] = False
+            self.application._open_settings_dialog()
+            self.root.update()
+            # The write fails AND the Run-key value is still present: a clear
+            # mismatch must be reported, not softened.
+            with patch.object(OverlayApp, "_set_autostart", return_value=False) as startup, \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=True, create=True):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+                startup.assert_called_once_with(False)
+            self.assertFalse(self.application.config["autostart"])
+            self.assertIn("未能生效", self.application.hint_label.cget("text"))
+
+    def test_autostart_disable_failure_with_already_desired_registry_is_not_reported(self):
+        # F-5: a failed write must not hide an already-desired state. The goal
+        # (no Run-key value) is observably reached, so "未能生效" would be a lie.
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory, autostart=True)
+            self.application.config["autostart"] = True
+            self.open_settings()
+            self.application._settings_working["autostart"] = False
+            self.application._open_settings_dialog()
+            self.root.update()
+            with patch.object(OverlayApp, "_set_autostart", return_value=False), \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=False, create=True):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+            self.assertFalse(self.application.config["autostart"])
+            self.assertEqual("", self.application.hint_label.cget("text"))
+
+    def test_autostart_confirmed_mismatch_is_reported_as_not_applied(self):
+        # F-5: the write claims success but the read-back clearly disagrees —
+        # that is a known mismatch ("未能生效"), never "无法确认".
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            self.open_settings()
+            self.application._settings_working["autostart"] = True
+            self.application._open_settings_dialog()
+            self.root.update()
+            with patch.object(OverlayApp, "_set_autostart", return_value=True), \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=False, create=True):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+            self.assertIn("未能生效", self.application.hint_label.cget("text"))
+            self.assertNotIn("无法确认", self.application.hint_label.cget("text"))
+
+    def test_autostart_write_without_confirmed_readback_is_not_reported_as_applied(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            self.open_settings()
+            self.application._settings_working["autostart"] = True
+            self.application._open_settings_dialog()
+            self.root.update()
+            with patch.object(OverlayApp, "_set_autostart", return_value=True), \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=None, create=True):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+            self.assertIn("无法确认", self.application.hint_label.cget("text"))
+            self.assertNotIn("未能生效", self.application.hint_label.cget("text"))
+
+    def test_successful_autostart_save_reports_no_hint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            self.open_settings()
+            self.application._settings_working["autostart"] = True
+            self.application._open_settings_dialog()
+            self.root.update()
+            with patch.object(OverlayApp, "_set_autostart", return_value=True), \
+                 patch.object(OverlayApp, "_query_autostart_state", return_value=True, create=True):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+            self.assertEqual("", self.application.hint_label.cget("text"))
+            self.assertIsNone(self.application.settings_window)
+
+    def test_config_save_failure_never_touches_registry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory)
+            self.open_settings()
+            self.application._settings_working["autostart"] = True
+            self.application._open_settings_dialog()
+            self.root.update()
+            with patch.object(OverlayApp, "_save_config", return_value=False), \
+                 patch("app.messagebox.showerror"), \
+                 patch.object(OverlayApp, "_set_autostart") as startup:
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+                startup.assert_not_called()
+            self.assertTrue(self.application.settings_window.winfo_exists())
 
     def test_sticky_hint_survives_metric_refresh_until_rebuild(self):
         with tempfile.TemporaryDirectory() as directory:
