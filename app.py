@@ -3490,6 +3490,7 @@ class OverlayApp:
             if len(parts) == 1:
                 return executable.name.lower() in {"hardware monitoring.exe", "hardwaremonitormini.exe"}
             return (len(parts) == 2
+                    and Path(parts[1]).is_absolute()
                     and executable.resolve() == Path(sys.executable).resolve()
                     and Path(parts[1]).resolve() == Path(__file__).resolve()
                     and Path(parts[1]).is_file())
