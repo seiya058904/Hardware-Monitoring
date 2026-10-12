@@ -23,7 +23,7 @@
 
 <p align="center">
   <sub>WINDOWS OVERLAY &nbsp;·&nbsp; LIVE METRICS &nbsp;·&nbsp; GAME FPS &nbsp;·&nbsp; OPTIONAL LAN VIEW</sub><br>
-  <sub>ENGLISH / SIMPLIFIED CHINESE &nbsp;·&nbsp; LATEST RELEASE v1.0.14</sub>
+  <sub>ENGLISH / SIMPLIFIED CHINESE &nbsp;·&nbsp; LATEST RELEASE v1.0.15</sub>
 </p>
 
 <p align="center">
@@ -85,7 +85,7 @@
 
 Get the Windows installer from **[GitHub Releases](https://github.com/seiya058904/Hardware-Monitoring/releases/latest)**.
 
-**Current release:** [v1.0.14](https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.14) · [Direct installer download](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.14/HardwareMonitoring_Setup_v1.0.14.exe)
+**Current release:** [v1.0.15](https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.15) · [Direct installer download](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.15/HardwareMonitoring_Setup_v1.0.15.exe)
 
 The installer may request administrator approval. Normal monitoring is designed for the Windows desktop; some capture capabilities can depend on system permissions.
 
