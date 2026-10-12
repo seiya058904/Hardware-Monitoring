@@ -38,6 +38,8 @@ class AutostartRegistryTests(unittest.TestCase):
         command = f'"{sys.executable}" "{Path(app.__file__).resolve()}"'
         self.assertIs(self.query({app.AUTOSTART_VALUE_NAME: (command, 1)}), True)
         self.assertIs(self.query({app.AUTOSTART_VALUE_NAME: (command + " --wrong", 1)}), False)
+        relative = f'"{sys.executable}" "app.py"'
+        self.assertIs(self.query({app.AUTOSTART_VALUE_NAME: (relative, 1)}), False)
 
     def test_current_and_legacy_packaged_commands_require_real_files(self):
         with tempfile.TemporaryDirectory() as directory:
