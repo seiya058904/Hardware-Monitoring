@@ -490,6 +490,11 @@ class SettingsTransactionTests(unittest.TestCase):
             # the settings entry point stays available as the retry path.
             self.assertIsNone(self.application.settings_window)
             self.assertIn("未能生效", self.application.hint_label.cget("text"))
+            # quiet_desktop spies on deiconify; actual native mapping is checked
+            # separately without touching the real startup registry.
+            self.root.deiconify.assert_called()
+            from app import messagebox
+            messagebox.showwarning.assert_called_once()
 
     def test_autostart_disable_failure_is_reported_too(self):
         with tempfile.TemporaryDirectory() as directory:

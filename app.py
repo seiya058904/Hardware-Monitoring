@@ -10,6 +10,7 @@ import math
 import os
 import socket
 import shutil
+import shlex
 import tempfile
 import subprocess
 import sys
@@ -3218,6 +3219,12 @@ class OverlayApp:
                     "Other settings were saved, but Start with Windows could not be applied; reopen Settings to retry",
                 ))
             self._close_settings_dialog()
+            if autostart_observed is None or autostart_observed is not autostart_desired:
+                # A tray-withdrawn overlay must display the persistent notice
+                # and allow Settings to be reopened for a safe retry.
+                if self.root.state() == "withdrawn":
+                    self._show_from_tray()
+                    messagebox.showwarning(APP_NAME, self._sticky_hint, parent=self.root)
 
         tk.Button(btn_row, text=tr("保存", "Save"), relief="flat", bd=0, padx=0, pady=px(10), cursor="hand2", bg=accent,
                   fg=on_accent, activebackground=accent, activeforeground=on_accent, font=("Segoe UI", 11, "bold"),
@@ -3455,13 +3462,39 @@ class OverlayApp:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ) as key:
                 for value_name in (AUTOSTART_VALUE_NAME, LEGACY_AUTOSTART_VALUE_NAME):
                     try:
-                        winreg.QueryValueEx(key, value_name)
-                        return True
+                        command, value_type = winreg.QueryValueEx(key, value_name)
+                        if value_type == winreg.REG_SZ and self._valid_autostart_command(command):
+                            return True
                     except FileNotFoundError:
                         pass
                 return False
+        except FileNotFoundError:
+            return False
         except Exception:
             return None
+
+    @staticmethod
+    def _valid_autostart_command(command: str) -> bool:
+        """Recognize usable application commands, including legacy installs."""
+        if not isinstance(command, str) or not command.strip():
+            return False
+        try:
+            parts = [part.strip('"') for part in shlex.split(command, posix=False)]
+            executable = Path(parts[0])
+            if not executable.is_absolute() or not executable.is_file():
+                return False
+            binary_type = ctypes.wintypes.DWORD()
+            if (not ctypes.windll.kernel32.GetBinaryTypeW(str(executable), ctypes.byref(binary_type))
+                    or binary_type.value not in (0, 6)):  # native Win32 / Win64
+                return False
+            if len(parts) == 1:
+                return executable.name.lower() in {"hardware monitoring.exe", "hardwaremonitormini.exe"}
+            return (len(parts) == 2
+                    and executable.resolve() == Path(sys.executable).resolve()
+                    and Path(parts[1]).resolve() == Path(__file__).resolve()
+                    and Path(parts[1]).is_file())
+        except (ValueError, OSError, IndexError, AttributeError):
+            return False
 
     def _is_autostart_enabled(self) -> bool:
         return self._query_autostart_state() is True
