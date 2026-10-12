@@ -11,6 +11,7 @@ import os
 import socket
 import shutil
 import shlex
+import stat
 import tempfile
 import subprocess
 import sys
@@ -2014,7 +2015,9 @@ class OverlayApp:
         self.root = root
         self.config = config
         self.logger = setup_logger(runtime_data_dir())
-        self.config["autostart"] = self._is_autostart_enabled()
+        self._autostart_state = self._is_autostart_enabled()
+        if self._autostart_state is not None:
+            self.config["autostart"] = self._autostart_state
         self._sampling_config = dict(config)
         self.sensor_runtime = SensorRuntime(SensorReader, lambda: self._sampling_config, Metrics, self.logger)
         self.fps_service = FpsService(self._app_dir(), self._runtime_base_dir(), self.logger)
@@ -2945,7 +2948,10 @@ class OverlayApp:
 
         make_switch(tab_window, tr("始终置顶", "Always on Top"), "always_on_top")
         make_switch(tab_window, tr("最小化到通知区域", "Minimize to Tray"), "minimize_to_tray")
-        make_switch(tab_window, tr("开机自启动", "Start with Windows"), "autostart")
+        autostart_label = tr("开机自启动", "Start with Windows")
+        if self._autostart_state is None:
+            autostart_label += tr("（状态未知）", " (state unknown)")
+        make_switch(tab_window, autostart_label, "autostart")
         make_switch(tab_window, tr("紧凑模式", "Compact Mode"), "compact_mode", preview_key=True)
         make_switch(tab_window, tr("显示分组标题", "Show Group Titles"), "show_group_titles", preview_key=True)
 
@@ -3199,6 +3205,7 @@ class OverlayApp:
             # write must not hide an already-desired state, and a confirmed
             # mismatch must not be softened into "cannot confirm".
             autostart_observed = self._query_autostart_state()
+            self._autostart_state = autostart_observed
             try:
                 self.logger.setLevel(getattr(logging, str(working.get("log_level", "INFO")), logging.INFO))
             except Exception:
@@ -3460,45 +3467,64 @@ class OverlayApp:
             return None
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ) as key:
+                unknown = False
                 for value_name in (AUTOSTART_VALUE_NAME, LEGACY_AUTOSTART_VALUE_NAME):
                     try:
                         command, value_type = winreg.QueryValueEx(key, value_name)
-                        if value_type == winreg.REG_SZ and self._valid_autostart_command(command):
+                        valid = self._valid_autostart_command(command) if value_type == winreg.REG_SZ else False
+                        if valid is True:
                             return True
+                        unknown = unknown or valid is None
                     except FileNotFoundError:
                         pass
-                return False
+                    except OSError:
+                        unknown = True
+                return None if unknown else False
         except FileNotFoundError:
             return False
         except Exception:
             return None
 
     @staticmethod
-    def _valid_autostart_command(command: str) -> bool:
-        """Recognize usable application commands, including legacy installs."""
+    def _valid_autostart_command(command: str) -> Optional[bool]:
+        """True for usable commands, False for invalid ones, None on check failure."""
         if not isinstance(command, str) or not command.strip():
             return False
         try:
             parts = [part.strip('"') for part in shlex.split(command, posix=False)]
             executable = Path(parts[0])
-            if not executable.is_absolute() or not executable.is_file():
-                return False
-            binary_type = ctypes.wintypes.DWORD()
-            if (not ctypes.windll.kernel32.GetBinaryTypeW(str(executable), ctypes.byref(binary_type))
-                    or binary_type.value not in (0, 6)):  # native Win32 / Win64
+            if not executable.is_absolute():
                 return False
             if len(parts) == 1:
-                return executable.name.lower() in {"hardware monitoring.exe", "hardwaremonitormini.exe"}
-            return (len(parts) == 2
-                    and Path(parts[1]).is_absolute()
-                    and executable.resolve() == Path(sys.executable).resolve()
-                    and Path(parts[1]).resolve() == Path(__file__).resolve()
-                    and Path(parts[1]).is_file())
-        except (ValueError, OSError, IndexError, AttributeError):
+                if executable.name.lower() not in {"hardware monitoring.exe", "hardwaremonitormini.exe"}:
+                    return False
+            elif (len(parts) != 2
+                  or not Path(parts[1]).is_absolute()
+                  or executable.resolve() != Path(sys.executable).resolve()
+                  or Path(parts[1]).resolve() != Path(__file__).resolve()):
+                return False
+            # is_file() suppresses some OS errors; stat keeps unreadable files unknown.
+            if not stat.S_ISREG(executable.stat().st_mode):
+                return False
+            if len(parts) == 2 and not stat.S_ISREG(Path(parts[1]).stat().st_mode):
+                return False
+            binary_type = ctypes.wintypes.DWORD()
+            get_binary_type = ctypes.WinDLL("kernel32", use_last_error=True).GetBinaryTypeW
+            get_binary_type.argtypes = [ctypes.wintypes.LPCWSTR, ctypes.POINTER(ctypes.wintypes.DWORD)]
+            get_binary_type.restype = ctypes.wintypes.BOOL
+            ctypes.set_last_error(0)
+            if not get_binary_type(str(executable), ctypes.byref(binary_type)):
+                # Missing path / bad executable are invalid. Access, sharing and
+                # other inspection failures say nothing about whether it is usable.
+                return False if ctypes.get_last_error() in (2, 3, 11, 193, 216) else None
+            return binary_type.value in (0, 6)  # native Win32 / Win64
+        except (ValueError, IndexError, FileNotFoundError, NotADirectoryError):
             return False
+        except (OSError, AttributeError):
+            return None
 
-    def _is_autostart_enabled(self) -> bool:
-        return self._query_autostart_state() is True
+    def _is_autostart_enabled(self) -> Optional[bool]:
+        return self._query_autostart_state()
 
     def _close_now(self) -> None:
         if self._stop_event.is_set():

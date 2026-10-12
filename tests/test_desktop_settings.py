@@ -111,7 +111,7 @@ class SettingsTransactionTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("Asynchronous settings result did not arrive")
 
-    def build_app(self, directory, **config_overrides):
+    def build_app(self, directory, autostart_state=False, **config_overrides):
         class Reader:
             gpu_devices = [("/gpu/a", "GPU A")]
             device_outcomes = {"/cpu": True}
@@ -127,8 +127,8 @@ class SettingsTransactionTests(unittest.TestCase):
             patch("app.setup_logger", return_value=logging.getLogger("settings-test")),
             patch("app.runtime_data_dir", return_value=Path(directory)),
             patch.object(OverlayApp, "_setup_tray"),
-            patch.object(OverlayApp, "_is_autostart_enabled", return_value=False),
-            patch.object(OverlayApp, "_query_autostart_state", return_value=False, create=True),
+            patch.object(OverlayApp, "_is_autostart_enabled", return_value=autostart_state),
+            patch.object(OverlayApp, "_query_autostart_state", return_value=autostart_state, create=True),
             patch.object(OverlayApp, "_set_autostart", return_value=True),
             patch.object(OverlayApp, "_list_process_names", return_value=[]),
         ]
@@ -463,6 +463,25 @@ class SettingsTransactionTests(unittest.TestCase):
             with patch.object(OverlayApp, "_close_now") as close_now:
                 application._on_close_clicked()
                 close_now.assert_not_called()
+
+    def test_unknown_startup_state_preserves_preference_and_is_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.build_app(directory, autostart_state=None, autostart=True)
+            self.assertTrue(self.application.config["autostart"])
+            self.open_settings()
+            labels = [child.cget("text") for child in settings_iter(self.application.settings_window)
+                      if isinstance(child, tk.Label)]
+            self.assertIn("开机自启动（状态未知）", labels)
+            self.application._settings_working["autostart"] = False
+            with patch.object(OverlayApp, "_set_autostart", return_value=False):
+                find_button(self.application.settings_window, "保存").invoke()
+                self.root.update()
+            self.assertIn("无法确认", self.application.hint_label.cget("text"))
+            self.assertIsNone(self.application._autostart_state)
+            self.open_settings()
+            labels = [child.cget("text") for child in settings_iter(self.application.settings_window)
+                      if isinstance(child, tk.Label)]
+            self.assertIn("开机自启动（状态未知）", labels)
 
     def test_autostart_failure_reports_partial_success_with_retry_entry(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -57,6 +57,26 @@ class AutostartRegistryTests(unittest.TestCase):
         with patch.object(app, "winreg", self.registry):
             self.assertIsNone(self.application._query_autostart_state())
 
+    def test_file_inspection_failure_is_unknown(self):
+        command = f'"{sys.executable}" "{Path(app.__file__).resolve()}"'
+        for error in (PermissionError("denied"), OSError("sharing violation")):
+            with self.subTest(error=error), patch.object(Path, "stat", side_effect=error):
+                self.assertIsNone(self.query({app.AUTOSTART_VALUE_NAME: (command, 1)}))
+
+    def test_binary_inspection_failure_is_unknown_unless_invalid(self):
+        command = f'"{sys.executable}" "{Path(app.__file__).resolve()}"'
+        kernel = MagicMock()
+        kernel.GetBinaryTypeW.return_value = 0
+        for code, expected in ((5, None), (32, None), (193, False), (2, False)):
+            with self.subTest(code=code), patch.object(app.ctypes, "WinDLL", return_value=kernel), patch.object(app.ctypes, "get_last_error", return_value=code):
+                self.assertIs(self.query({app.AUTOSTART_VALUE_NAME: (command, 1)}), expected)
+
+    def test_valid_legacy_command_overrides_unknown_current_command(self):
+        with patch.object(self.application, "_valid_autostart_command", side_effect=[None, True]):
+            self.assertIs(self.query({app.AUTOSTART_VALUE_NAME: ("current", 1), app.LEGACY_AUTOSTART_VALUE_NAME: ("legacy", 1)}), True)
+        with patch.object(self.application, "_valid_autostart_command", side_effect=[None, False]):
+            self.assertIsNone(self.query({app.AUTOSTART_VALUE_NAME: ("current", 1), app.LEGACY_AUTOSTART_VALUE_NAME: ("legacy", 1)}))
+
     def test_write_denied_is_reported_without_real_registry_changes(self):
         self.registry.OpenKey.side_effect = PermissionError()
         with patch.object(app, "winreg", self.registry):
