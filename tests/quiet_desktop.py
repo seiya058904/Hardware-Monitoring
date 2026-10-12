@@ -22,4 +22,5 @@ def quiet_desktop(root):
         stack.enter_context(patch.object(tk.Misc, 'focus_force'))
         stack.enter_context(patch.object(tk.Misc, 'focus_set'))
         stack.enter_context(patch.object(tk.Misc, 'lift'))
+        stack.enter_context(patch('app.messagebox.showwarning'))
         yield
