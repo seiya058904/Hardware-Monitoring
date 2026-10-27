@@ -129,15 +129,17 @@ You can optionally open a **read-only LAN dashboard** on a phone, tablet, or ano
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img width="100%" alt="Hardware Monitoring — existing mobile LAN dashboard screenshot" src="https://github.com/user-attachments/assets/8b3a7b37-8b3b-4df3-8617-d46968ff386f" />
-      <p align="center"><sub>MOBILE VIEW</sub></p>
+      <img width="100%" alt="Hardware Monitoring — desktop overlay screenshot" src="https://github.com/user-attachments/assets/8b3a7b37-8b3b-4df3-8617-d46968ff386f" />
+      <p align="center"><sub>DESKTOP OVERLAY</sub></p>
     </td>
     <td width="50%" valign="top">
-      <img width="100%" alt="Hardware Monitoring — existing LAN metrics screenshot" src="https://github.com/user-attachments/assets/bc32c3e2-4bfd-4ec3-b402-3ca316fc8b86" />
-      <p align="center"><sub>METRICS VIEW</sub></p>
+      <img width="100%" alt="Hardware Monitoring — Settings window screenshot" src="https://github.com/user-attachments/assets/bc32c3e2-4bfd-4ec3-b402-3ca316fc8b86" />
+      <p align="center"><sub>SETTINGS WINDOW</sub></p>
     </td>
   </tr>
 </table>
+
+<p align="center"><sub>These two screenshots show the Windows overlay and its Settings window. A screenshot of the LAN dashboard itself is not included yet.</sub></p>
 
 **To use it:**
 
