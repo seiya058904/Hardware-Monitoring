@@ -1,195 +1,95 @@
-<h1 align="center">🖥️ Hardware Monitoring</h1>
-
 <p align="center">
-  <strong>Know what your PC is doing. At a glance.</strong>
+  <img src="docs/assets/readme-hero.svg" width="100%" alt="Hardware Monitoring" />
 </p>
 
-<p align="center">
-  A lightweight Windows monitoring overlay for hardware metrics, game performance,<br>
-  and a clear view of your system—right where you need it.
-</p>
+A lightweight Windows overlay for live CPU, GPU, memory, temperature, and game-FPS readings. It tells you when a sensor value is fresh, degraded, stale, or unavailable instead of letting an old number pass for a live one.
 
-<p align="center">
-  <a href="https://github.com/seiya058904/Hardware-Monitoring/releases/latest"><strong>⬇️ Download for Windows</strong></a>
-  &nbsp;·&nbsp;
-  <a href="#get-started">🚀 Get Started</a>
-  &nbsp;·&nbsp;
-  <a href="#at-a-glance">📊 Features</a>
-  &nbsp;·&nbsp;
-  <a href="#on-another-screen">📱 LAN Dashboard</a>
-  &nbsp;·&nbsp;
-  <a href="#for-developers">⚙️ Development</a>
-</p>
+**[Download for Windows](https://github.com/seiya058904/Hardware-Monitoring/releases/latest)** · [Get started](#get-started) · [Features](#features) · [LAN dashboard](#lan-dashboard) · [Development](#development)
 
-<p align="center">
-  <sub>WINDOWS OVERLAY &nbsp;·&nbsp; LIVE METRICS &nbsp;·&nbsp; GAME FPS &nbsp;·&nbsp; OPTIONAL LAN VIEW</sub><br>
-  <sub>UI: English / 简体中文 &nbsp;·&nbsp; LATEST RELEASE v1.0.16</sub>
-</p>
+[![CI](https://github.com/seiya058904/Hardware-Monitoring/actions/workflows/ci.yml/badge.svg)](https://github.com/seiya058904/Hardware-Monitoring/actions/workflows/ci.yml)
 
-<p align="center">
-  <img width="740" alt="Hardware Monitoring — original project overview" src="https://github.com/user-attachments/assets/11b6ff6b-830c-418a-89f9-98d1758eaa25" />
-</p>
+Latest release: [v1.0.16](https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.16), for Windows x64. The interface is available in English and Simplified Chinese.
 
----
-
-> **Useful readings. Honest status. Less visual noise.**
->
-> Hardware Monitoring keeps the important numbers within reach, without turning your desktop into a full analytics dashboard. When a sensor cannot provide a reliable reading, the application distinguishes missing or stale data from a real zero.
-
-<a id="at-a-glance"></a>
-## ✨ At a Glance
+*Illustration of the overlay, not a screenshot. Real screenshots are below.*
 
 <table>
   <tr>
-    <td width="50%" valign="top">
-      <h3>⚡ Live Hardware</h3>
-      <p><sub>CPU · GPU · MEMORY · TEMPERATURES</sub></p>
-      <p>Observe utilization, clocks, power, thermals, and memory-related readings from the devices and sensors that support them.</p>
-    </td>
-    <td width="50%" valign="top">
-      <h3>🎮 Game Performance</h3>
-      <p><sub>FPS · 1% LOW · TARGET PROCESS</sub></p>
-      <p>Enable frame-rate monitoring when needed, choose the target game process, and inspect FPS or available 1% Low measurements.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <h3>🪟 A Desktop-First Overlay</h3>
-      <p><sub>COMPACT VIEW · OPACITY · ALWAYS ON TOP</sub></p>
-      <p>Keep a small, configurable window nearby. Adjust which metrics appear, their order, the refresh interval, and the overlay's appearance.</p>
-    </td>
-    <td width="50%" valign="top">
-      <h3>🛡️ Sampling Health</h3>
-      <p><sub>FRESH · DEGRADED · STALE · UNAVAILABLE</sub></p>
-      <p>See whether a measurement is current, partially degraded, out of date, or unavailable instead of mistaking an old value for a live one.</p>
-    </td>
+    <td width="40%" valign="top"><img src="docs/assets/readme-overlay.png" alt="The Hardware Monitoring overlay showing game, system, GPU, temperature, frequency, disk, and network rows, with the Chinese interface selected" /></td>
+    <td width="60%" valign="top"><img src="docs/assets/readme-settings.png" alt="The Settings window on its Appearance tab, with language, theme, refresh interval, and opacity controls and Cancel and Save buttons" /></td>
   </tr>
 </table>
 
-### 📈 What Can Be Monitored?
+*The overlay and its Settings window with the Chinese interface selected. The build they were captured from is not recorded, and the readings come from the author's PC.*
 
-| Area | Examples |
-| --- | --- |
-| **Processor & graphics** | CPU/GPU load, temperatures, clocks, power, fans, and VRAM where supported |
-| **Memory & system** | RAM usage, memory frequency, battery status, and supported sensor readings |
-| **Game performance** | FPS, 1% Low, and the selected target process |
-| **Storage & network** | Disk activity, network throughput, latency, and available SSD temperature |
+## Features
+
+- **Live hardware readings.** CPU and GPU load, temperatures, clocks, power, fans, and VRAM, plus RAM usage, disk activity, network throughput, and battery status, wherever your hardware and drivers expose them.
+- **Game performance.** Turn on FPS capture when you need it, choose the target game process, and read FPS and 1% Low where capture succeeds. Capture uses PresentMon.
+- **A compact desktop overlay.** Choose which metrics appear and in what order, and adjust compact mode, opacity, theme, and refresh interval (0.5, 1, or 2 seconds). The overlay has a tray icon and window-position controls.
+- **Honest sampling state.** Every sample is `ok`, `degraded`, `stale`, or `unavailable` (see [Sampling States](#sampling-states)).
+- **An optional read-only LAN dashboard.** View the same readings from a phone, tablet, or another computer on your private network. It is off by default.
 
 > [!NOTE]
-> **Available metrics depend on your hardware, drivers, permissions, and capture tools.** Missing data is shown as unavailable; not every PC can expose every sensor or provide frame-time statistics.
+> Available metrics depend on your hardware, drivers, permissions, and capture tools. Missing data is shown as unavailable, and not every PC can expose every sensor or provide frame-time statistics. NVIDIA-specific fallback sampling uses `nvidia-smi` when it is available.
 
-<a id="get-started"></a>
-## 🚀 Get Started
+## Get Started
 
-### 1. Download and install
+**System and hardware:** the installer is for Windows x64. The project has been exercised on Windows 11 with an AMD Radeon RX 7900 XT. A minimum Windows version and broad GPU compatibility have not been established, and the installer's runtime prerequisites have not been comprehensively verified.
 
-Get the Windows installer from **[GitHub Releases](https://github.com/seiya058904/Hardware-Monitoring/releases/latest)**.
-
-**Current release:** [v1.0.16](https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.16) · [Direct installer download](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.16/HardwareMonitoring_Setup_v1.0.16.exe)
-
-The installer may request administrator approval. Normal monitoring is designed for the Windows desktop; some capture capabilities can depend on system permissions.
-
-**System and hardware:** The current installer is for Windows x64. The project has been exercised on Windows 11 with an AMD Radeon RX 7900 XT; a minimum Windows version and comprehensive GPU compatibility have not been established. Sensor availability varies by hardware and driver; NVIDIA-specific fallback sampling uses `nvidia-smi` when available. The installer packages the application and monitoring components, but independent runtime prerequisites have not been comprehensively verified. Running from source has separate Python dependencies described below.
+1. **Install.** Download [`HardwareMonitoring_Setup_v1.0.16.exe`](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.16/HardwareMonitoring_Setup_v1.0.16.exe) from the [release page](https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.16). The installer may ask for administrator approval.
+2. **Set up the overlay.** Launch Hardware Monitoring and open Settings. Pick your metrics and their order, adjust compact mode, opacity, theme, and refresh interval, and enable game FPS collection or the LAN dashboard only if you need them. **Save** applies the settings; **Cancel** discards an unfinished preview.
+3. **Keep it in reach.** Use the overlay beside your work or games, with tray access and window-position controls.
 
 > [!IMPORTANT]
-> The v1.0.16 installer and application are not code-signed. Windows may show an Unknown Publisher or Microsoft Defender SmartScreen warning. Download only from the official Releases page and verify the installer against the SHA-256 published for the same release before running it.
+> The v1.0.16 installer and application are not code-signed, so Windows may show an Unknown Publisher or SmartScreen warning. Download only from the official Releases page and compare the installer's SHA-256 with the one published for the same release (`HardwareMonitoring_Setup_v1.0.16.sha256`) before running it:
+>
+> ```powershell
+> Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\path\to\HardwareMonitoring_Setup_v1.0.16.exe'
+> ```
 
-In PowerShell, replace the path with the downloaded installer and compare the resulting hash with the release's installer SHA-256 or checksum asset:
+Configuration and logs are stored in `%LOCALAPPDATA%\Hardware Monitoring`. An ordinary uninstall is designed to keep that data.
 
-```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\path\to\HardwareMonitoring_Setup_v1.0.16.exe'
-```
+## LAN Dashboard
 
-### 2. Set up your overlay
+While Hardware Monitoring runs on Windows, a phone, tablet, or other computer can open a read-only dashboard of the same data. It has English and Simplified Chinese text and light and dark themes.
 
-Launch **Hardware Monitoring**, check the available measurements, and customize the window for your desktop.
+1. Open the Windows app's Advanced settings and explicitly enable the LAN dashboard. It is off by default.
+2. Put the viewing device and your PC on the same trusted private network.
+3. Open the LAN address shown by the app in the other device's browser. The default port is `8765`.
 
-- Choose the metrics you want to see and their order.
-- Adjust compact mode, opacity, theme, and refresh frequency.
-- Enable game FPS collection or the LAN dashboard only when you need them.
-- Use **Save** to apply persistent settings; **Cancel** discards an unfinished settings preview.
-
-### 3. Leave it within reach
-
-Use the overlay alongside your work or games, with tray access and window-position controls designed for normal desktop use.
-
-Your local configuration and logs are stored under:
-
-```text
-%LOCALAPPDATA%\Hardware Monitoring
-```
-
-Ordinary uninstall is designed to preserve that user data rather than silently deleting personal settings and logs.
-
-<a id="on-another-screen"></a>
-## 📱 On Another Screen
-
-You can optionally open a **read-only LAN dashboard** on a phone, tablet, or another computer while Hardware Monitoring runs on Windows. It uses the same monitoring data as the desktop overlay.
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <img width="100%" alt="Hardware Monitoring — existing mobile LAN dashboard screenshot" src="https://github.com/user-attachments/assets/8b3a7b37-8b3b-4df3-8617-d46968ff386f" />
-      <p align="center"><sub>MOBILE VIEW</sub></p>
-    </td>
-    <td width="50%" valign="top">
-      <img width="100%" alt="Hardware Monitoring — existing LAN metrics screenshot" src="https://github.com/user-attachments/assets/bc32c3e2-4bfd-4ec3-b402-3ca316fc8b86" />
-      <p align="center"><sub>METRICS VIEW</sub></p>
-    </td>
-  </tr>
-</table>
-
-**To use it:**
-
-1. Open **Advanced Settings** in the Windows application and explicitly enable the LAN dashboard. It is **off by default**.
-2. Put the viewing device and your PC on the **same trusted private network**.
-3. Open the LAN address shown by the application in the other device's browser (default port **`8765`**).
-
-The dashboard provides a responsive metrics view with English / Simplified Chinese and light / dark display options. Its exposed HTTP routes are limited to `GET /`, `GET /api/metrics`, and `GET /healthz`; it does **not** offer remote PC control or file access.
+The server answers only `GET /`, `GET /api/metrics`, and `GET /healthz`. It offers no remote control and no file access.
 
 > [!WARNING]
-> **Private networks only.** The optional LAN server has **no authentication** and must not be exposed to the public internet, a port-forward, or a public tunnel. Hardware Monitoring does not automatically change your firewall or router settings.
+> Use private networks only. The LAN server has no authentication, so never expose it to the public internet, a port forward, or a public tunnel. The app does not change your firewall or router settings.
 
-### 📡 Optional Android Companion
+The optional [Termux monitoring node](android/termux/README.md) can run outbound-only health checks from an Android phone against your Windows dashboard and other configured network targets. It opens no incoming port on the phone and is not needed for ordinary Windows monitoring.
 
-The [Termux monitoring node](android/termux/README.md) can perform **outbound-only health checks** from Android against your trusted Windows dashboard and configured network targets. It opens no incoming port on the phone and is **not required** for ordinary Windows monitoring.
+## Sampling States
 
-## 🔍 Trust the Reading, Not Just the Number
-
-The application tracks the state of its sampling pipeline, not just the last value it received.
-
-| State | What it tells you |
+| State | Meaning |
 | --- | --- |
 | `ok` | Fresh readings are available. |
 | `degraded` | Updated data is available, but one or more device sources had a problem. |
 | `stale` | The last sample is too old to treat as current. |
 | `unavailable` | A reliable sample is not currently available. |
 
-On the LAN dashboard, sample state and age matter **in addition to** whether the HTTP service responds. A healthy network response alone does not mean that the underlying hardware measurements are fresh.
+On the LAN dashboard, sample state and age matter as much as whether the HTTP service responds. A healthy network response does not mean the hardware readings are fresh.
 
-<a id="for-developers"></a>
-## ⚙️ For Developers
+## Development
 
-The application uses **Python / Tkinter** for the desktop interface, **LibreHardwareMonitor** for supported sensor access, and **PresentMon** for game-frame capture. The optional LAN service is a bounded, read-only HTTP server.
-
-<details>
-<summary><strong>🛠️ Expand source layout, local verification &amp; packaging</strong></summary>
-
-### Source map
+The overlay is Python and Tkinter. It reads sensors through LibreHardwareMonitor, captures game frames with PresentMon, and serves the optional LAN dashboard from a bounded, read-only HTTP server.
 
 | Path | Purpose |
 | --- | --- |
-| [`app.py`](app.py) | Windows overlay, settings, tray, and dashboard integration |
+| [`app.py`](app.py) | Overlay, settings, tray, and dashboard integration |
 | [`sensor_runtime.py`](sensor_runtime.py) | Sampling pipeline and freshness reporting |
-| [`fps_stream.py`](fps_stream.py) · [`fps_sessions.py`](fps_sessions.py) | Frame capture and active session ownership |
+| [`fps_stream.py`](fps_stream.py), [`fps_sessions.py`](fps_sessions.py) | Frame capture and active session ownership |
 | [`service_runtime.py`](service_runtime.py) | Background service changes without blocking Tk |
 | [`dashboard_server.py`](dashboard_server.py) | Bounded LAN request handling and shutdown |
-| [`android/termux/`](android/termux/) | Optional, outbound-only Android monitoring node |
+| [`android/termux/`](android/termux/) | Optional outbound-only Android node |
 | [`tests/`](tests/) | Core, desktop, sampling, and installer regressions |
 
-### Run and verify
-
-On Windows, install the pinned Python dependencies from [`requirements-runtime.txt`](requirements-runtime.txt), then run the application and its tests from the repository root:
+On Windows, install the pinned dependencies and run from the repository root:
 
 ```powershell
 python -m pip install -r requirements-runtime.txt
@@ -197,11 +97,9 @@ python app.py
 python -m unittest discover -s tests -v
 ```
 
-A fresh checkout may also need the exact pinned PresentMon and LibreHardwareMonitor build inputs. With network acquisition explicitly intended, [`scripts/fetch-dependencies.ps1`](scripts/fetch-dependencies.ps1) downloads and SHA-256-verifies them. Do not substitute arbitrary binaries or remove ignored canonical inputs during cleanup.
+A fresh checkout also needs the exact pinned PresentMon and LibreHardwareMonitor binaries. [`scripts/fetch-dependencies.ps1`](scripts/fetch-dependencies.ps1) downloads them and verifies their SHA-256 hashes; do not substitute other binaries.
 
-### Packaging
-
-PyInstaller (listed in [`requirements-build.txt`](requirements-build.txt)) and NSIS are required for Windows installer builds:
+To build the installer, you need PyInstaller ([`requirements-build.txt`](requirements-build.txt)) and NSIS:
 
 ```powershell
 python -m pip install -r requirements-build.txt
@@ -209,21 +107,14 @@ pyinstaller "Hardware Monitoring.spec" --noconfirm
 makensis "Hardware Monitoring.nsi"
 ```
 
-The PyInstaller specification checks the pinned binary hashes. CI runs Python syntax and Windows core tests plus Linux-based Termux contracts; those checks do **not** by themselves prove physical Android behavior, multi-monitor hardware scenarios, or successful ETW/FPS capture on every machine.
+CI runs Python syntax checks and the core tests on Windows, plus the Termux contract tests on Linux. These do not prove physical Android behavior, multi-monitor scenarios, or successful ETW/FPS capture on every machine. See the [engineering upgrade](docs/engineering-upgrade-1.0.13.md), the [release audit](docs/release-audit-1.0.13.md), and the [repository guidelines](AGENTS.md).
 
-**Further reading:** [Engineering upgrade](docs/engineering-upgrade-1.0.13.md) · [Release audit](docs/release-audit-1.0.13.md) · [Repository guidelines](AGENTS.md)
+## Concept Art
 
-</details>
+Concept art made for this project. It is an illustration, not a screenshot, and details may differ from the shipped interface. Wording in the artwork, including its license badge, is decorative: see the License and Notices section for the actual terms.
 
-## 📜 Rights & Notices
+![A concept poster for Hardware Monitoring](docs/assets/concept-art.jpg)
 
-Hardware Monitoring is an observation tool, **not a substitute for professional hardware diagnostics**. Sensor availability and refresh behavior depend on the system being monitored.
+## License and Notices
 
-Third-party component licenses and provenance are recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`third_party/licenses/`](third_party/licenses/). Public source access should not be mistaken for a project-wide license that has not been declared.
-
----
-
-<p align="center">
-  <sub>THE RIGHT NUMBERS. THE RIGHT PLACE. THE RIGHT CONTEXT.</sub><br>
-  <sub>Hardware Monitoring · A quieter view of your Windows PC.</sub>
-</p>
+Hardware Monitoring is an observation tool, not a substitute for professional hardware diagnostics. The repository does not declare a project-wide license, so public source access is not permission to redistribute or reuse the code. Third-party component licenses and provenance are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`third_party/licenses/`](third_party/licenses/).
