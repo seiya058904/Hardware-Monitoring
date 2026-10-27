@@ -7,6 +7,7 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +29,8 @@ jobs:
         run: git diff --check
 
   termux-contracts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
