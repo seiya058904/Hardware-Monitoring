@@ -1329,6 +1329,8 @@ class FpsService:
         self._worker_thread: Optional[threading.Thread] = None
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
+        self._configuration_lock = threading.Lock()
+        self._configuration_generation = 0
         self._display_text = "关闭"
         self._low_display_text = "关闭"
         self._last_value_ts = 0.0
@@ -1349,49 +1351,34 @@ class FpsService:
 
     def configure(self, enabled: bool, target_process: str, force_restart: bool = False) -> None:
         target_process = (target_process or "").strip()
-        need_restart = False
         with self._lock:
-            prev_enabled = self._enabled
-            prev_target = self._target_process
-            self._enabled = bool(enabled)
-            self._target_process = target_process
-
-            if not self._enabled:
-                self._display_text = "关闭"
-                self._low_display_text = "关闭"
-                self._low_dirty = False
-                self._error_code = ''
-            elif not self._target_process:
-                self._display_text = "未选择"
-                self._low_display_text = "未选择"
-                self._low_dirty = False
-                self._error_code = ''
-            elif self._resolve_presentmon_path() is None:
-                self._display_text = "不可用"
-                self._low_display_text = "不可用"
-                self._low_dirty = False
-            elif force_restart:
-                need_restart = True
-            elif (not prev_enabled and self._enabled) or (prev_target != self._target_process):
-                need_restart = True
-            elif self._capture_needs_retry_locked():
-                need_restart = True
-
-        if not self._enabled or not self._target_process:
-            self.stop()
-            return
-        resolved = self._resolve_presentmon_path()
-        if resolved is None:
-            self._presentmon_available = False
-            self.stop()
+            self._configuration_generation += 1
+            generation = self._configuration_generation
+        # Filesystem/PATH lookup must never hold the UI snapshot lock.
+        resolved = self._resolve_presentmon_path() if enabled and target_process else None
+        # Serialize lifecycle publication separately from UI reads. A newer request
+        # (including disable/close) invalidates any slow resolver still in flight.
+        with self._configuration_lock:
             with self._lock:
-                self._display_text = "不可用"
-                self._low_display_text = "不可用"
-            return
-        self._presentmon_available = True
-        self._active_presentmon_path = resolved
-        if need_restart:
-            self.restart()
+                if generation != self._configuration_generation:
+                    return
+                prev_enabled, prev_target = self._enabled, self._target_process
+                self._enabled = bool(enabled)
+                self._target_process = target_process
+                self._presentmon_available = resolved is not None
+                self._active_presentmon_path = resolved
+                need_restart = bool(resolved is not None and (
+                    force_restart or not prev_enabled or prev_target != target_process
+                    or self._capture_needs_retry_locked()))
+                if not enabled or not target_process or resolved is None:
+                    self._display_text = "关闭" if not enabled else "未选择" if not target_process else "不可用"
+                    self._low_display_text = self._display_text
+                    self._low_dirty = False
+                    self._error_code = ''
+            if not enabled or not target_process or resolved is None:
+                self.stop()
+            elif need_restart:
+                self.restart()
 
     def _capture_needs_retry_locked(self) -> bool:
         return bool(self._enabled and self._target_process and (
@@ -1410,6 +1397,9 @@ class FpsService:
             self._app_dir / "tools" / "PresentMon" / "PresentMon.exe",
             self._runtime_base_dir / "tools" / "PresentMon" / "PresentMon.exe",
         ]
+        # Prefer bundled candidates without probing a potentially slow PATH.
+        if any(p.exists() for p in candidates):
+            return candidates
         # Also check system PATH
         system_path = shutil.which("PresentMon")
         if system_path:
@@ -1520,7 +1510,10 @@ class FpsService:
             self._logger.warning("PresentMon process cleanup incomplete", exc_info=True)
 
     def close(self) -> None:
-        self.stop()
+        with self._lock:
+            self._configuration_generation += 1
+        with self._configuration_lock:
+            self.stop()
 
     def get_display_text(self) -> str:
         return self.snapshot()['fps']

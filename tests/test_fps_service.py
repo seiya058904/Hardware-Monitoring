@@ -41,6 +41,54 @@ class FakeProcess:
 
 
 class FpsServiceTest(unittest.TestCase):
+    def test_slow_path_lookup_does_not_block_snapshot_or_publish_after_disable(self):
+        service = FpsService(Path('.'), Path('.'), logging.getLogger('fps-path'))
+        entered, release, snapshot_done = threading.Event(), threading.Event(), threading.Event()
+        def resolve():
+            entered.set()
+            release.wait(3)
+            return Path('PresentMon.exe')
+        with patch.object(service, '_resolve_presentmon_path', side_effect=resolve), patch.object(service, 'restart') as restart:
+            writer = threading.Thread(target=lambda: service.configure(True, 'old.exe'))
+            reader = threading.Thread(target=lambda: (service.snapshot(), snapshot_done.set()))
+            writer.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                reader.start()
+                self.assertTrue(snapshot_done.wait(.5), 'snapshot must not wait for path I/O')
+                service.configure(False, '')
+            finally:
+                release.set()
+                writer.join(3)
+                if reader.ident is not None:
+                    reader.join(3)
+            restart.assert_not_called()
+            self.assertEqual('关闭', service.snapshot()['fps'])
+            self.assertEqual('', service.snapshot()['target_process'])
+            self.assertIsNone(service._active_presentmon_path)
+
+    def test_newer_configuration_wins_over_slow_older_lookup(self):
+        service = FpsService(Path('.'), Path('.'), logging.getLogger('fps-order'))
+        entered, release = threading.Event(), threading.Event()
+        def resolve():
+            if threading.current_thread().name == 'old-resolver':
+                entered.set()
+                release.wait(3)
+                return Path('old.exe')
+            return Path('new.exe')
+        with patch.object(service, '_resolve_presentmon_path', side_effect=resolve), patch.object(service, 'restart') as restart:
+            old = threading.Thread(name='old-resolver', target=lambda: service.configure(True, 'old-game.exe'))
+            old.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                service.configure(True, 'new-game.exe')
+            finally:
+                release.set()
+                old.join(3)
+            self.assertEqual('new-game.exe', service.snapshot()['target_process'])
+            self.assertEqual(Path('new.exe'), service._active_presentmon_path)
+            restart.assert_called_once()
+
     def test_same_target_retries_failed_capture_once_and_keeps_healthy_worker(self):
         service = FpsService(Path('.'), Path('.'), logging.getLogger('fps-retry'))
         started = threading.Event()
