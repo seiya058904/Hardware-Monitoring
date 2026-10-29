@@ -23,7 +23,7 @@
 
 <p align="center">
   <sub>WINDOWS OVERLAY &nbsp;·&nbsp; LIVE METRICS &nbsp;·&nbsp; GAME FPS &nbsp;·&nbsp; OPTIONAL LAN VIEW</sub><br>
-  <sub>UI: English / 简体中文 &nbsp;·&nbsp; LATEST RELEASE v1.0.16</sub>
+  <sub>UI: English / 简体中文 &nbsp;·&nbsp; LATEST RELEASE v1.0.17</sub>
 </p>
 
 <p align="center">
@@ -85,19 +85,19 @@
 
 Get the Windows installer from **[GitHub Releases](https://github.com/seiya058904/Hardware-Monitoring/releases/latest)**.
 
-**Current release:** [v1.0.16](https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.16) · [Direct installer download](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.16/HardwareMonitoring_Setup_v1.0.16.exe)
+**Current release:** [v1.0.17](https://github.com/seiya058904/Hardware-Monitoring/releases/tag/v1.0.17) · [Direct installer download](https://github.com/seiya058904/Hardware-Monitoring/releases/download/v1.0.17/HardwareMonitoring_Setup_v1.0.17.exe)
 
 The installer may request administrator approval. Normal monitoring is designed for the Windows desktop; some capture capabilities can depend on system permissions.
 
 **System and hardware:** The current installer is for Windows x64. The project has been exercised on Windows 11 with an AMD Radeon RX 7900 XT; a minimum Windows version and comprehensive GPU compatibility have not been established. Sensor availability varies by hardware and driver; NVIDIA-specific fallback sampling uses `nvidia-smi` when available. The installer packages the application and monitoring components, but independent runtime prerequisites have not been comprehensively verified. Running from source has separate Python dependencies described below.
 
 > [!IMPORTANT]
-> The v1.0.16 installer and application are not code-signed. Windows may show an Unknown Publisher or Microsoft Defender SmartScreen warning. Download only from the official Releases page and verify the installer against the SHA-256 published for the same release before running it.
+> The v1.0.17 installer and application are not code-signed. Windows may show an Unknown Publisher or Microsoft Defender SmartScreen warning. Download only from the official Releases page and verify the installer against the SHA-256 published for the same release before running it.
 
 In PowerShell, replace the path with the downloaded installer and compare the resulting hash with the release's installer SHA-256 or checksum asset:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\path\to\HardwareMonitoring_Setup_v1.0.16.exe'
+Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\path\to\HardwareMonitoring_Setup_v1.0.17.exe'
 ```
 
 ### 2. Set up your overlay
