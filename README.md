@@ -93,7 +93,12 @@ Get the Windows installer from **[GitHub Releases](https://github.com/seiya05890
 
 The installer may request administrator approval. Normal monitoring is designed for the Windows desktop; some capture capabilities can depend on system permissions.
 
-**System and hardware:** The current installer is for Windows x64. The project has been exercised on Windows 11 with an AMD Radeon RX 7900 XT; a minimum Windows version and comprehensive GPU compatibility have not been established. Sensor availability varies by hardware and driver; NVIDIA-specific fallback sampling uses `nvidia-smi` when available. The installer packages the application and monitoring components, but independent runtime prerequisites have not been comprehensively verified. Running from source has separate Python dependencies described below.
+| Before you install | Current support and evidence |
+| --- | --- |
+| **Platform** | Windows x64; exercised on Windows 11 with an AMD Radeon RX 7900 XT. |
+| **Compatibility** | A minimum Windows version and comprehensive GPU compatibility have not been established. |
+| **Sensors** | Availability varies by hardware and driver. NVIDIA-specific fallback sampling uses `nvidia-smi` when available. |
+| **Dependencies** | The installer bundles the application and monitoring components; independent runtime prerequisites have not been comprehensively verified. Source setup has separate [Python dependencies](#for-developers). |
 
 > [!IMPORTANT]
 > The v1.0.17 installer and application are not code-signed. Windows may show an Unknown Publisher or Microsoft Defender SmartScreen warning. Download only from the official Releases page and verify the installer against the SHA-256 published for the same release before running it.
