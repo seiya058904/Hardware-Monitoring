@@ -1,6 +1,10 @@
 <h1 align="center">🖥️ Hardware Monitoring</h1>
 
 <p align="center">
+  <img src="readme-cover.svg" width="100%" alt="A conceptual processor and sensor traces in a dark teal palette" />
+</p>
+
+<p align="center">
   <strong>Know what your PC is doing. At a glance.</strong>
 </p>
 
@@ -23,7 +27,7 @@
 
 <p align="center">
   <sub>WINDOWS OVERLAY &nbsp;·&nbsp; LIVE METRICS &nbsp;·&nbsp; GAME FPS &nbsp;·&nbsp; OPTIONAL LAN VIEW</sub><br>
-  <sub>UI: English / 简体中文 &nbsp;·&nbsp; LATEST RELEASE v1.0.17</sub>
+  <sub>UI: English / Simplified Chinese &nbsp;·&nbsp; LATEST RELEASE v1.0.17</sub>
 </p>
 
 <p align="center">
