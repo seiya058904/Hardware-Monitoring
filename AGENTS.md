@@ -29,6 +29,8 @@ Packaging needs PyInstaller and NSIS; NSIS consumes `dist\Hardware Monitoring`. 
 
 FPS settings regressions use real Windows Tk callbacks with synthetic capture processes; successful ETW/PresentMon hardware capture requires separate validation.
 
+For Termux device checks, prefer the connected physical test phone and Mobile MCP when available; use ADB or Termux as appropriate without exposing private configuration. Keep CI shell tests and physical Android results separate, and report an unavailable device as not tested. Do not install, change permissions or alter phone data without the task authorization.
+
 ## Build inputs and cleanup
 
 `tools/PresentMon/PresentMon.exe` and `_internal/libs/LibreHardwareMonitorLib.dll` are pinned inputs checked by SHA-256 in the spec. **The ignored `_internal/libs` DLL is a canonical build input; preserve it during cache cleanup.** `scripts/fetch-dependencies.ps1` downloads/verifies those binaries when acquisition is authorized.
