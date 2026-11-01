@@ -39,7 +39,9 @@ For Termux device checks, prefer the connected physical test phone and Mobile MC
 
 ## Invariants
 
-- Preserve config keys, metric names, defaults and Windows behavior. Settings save/cancel stays transactional; uninstall retains the user's runtime directory.
+- Preserve config keys, metric names, defaults and Windows behavior; uninstall retains the user's runtime directory. Write `config.json` atomically in the runtime directory and preserve invalid originals as `config.invalid-<hash>.json`.
+- Settings previews change only in-memory appearance/metric toggles. Save commits configuration and applies FPS/LAN/autostart/log-level changes; Cancel or closing restores the original configuration. Keep `window_opacity` within [0.35, 1.0] and persist/clamp `window_x`/`window_y` into visible monitor work areas.
+- Reuse `THEMES` semantic tokens and keep settings themed. The self-contained LAN page uses vanilla JS, no external resources, bilingual/theme support and strict `sample_state`/`sample_generation` freshness handling.
 - Monitor work areas use an explicit Win32 `MONITORINFO` and pointer-sized handles. Keep signed virtual-screen coordinates, apply Tk geometry before selecting the monitor, and clamp the final overlay to that work area; native API failures retain the fallback layout. Use hidden Tk regressions for negative monitors and DPI fixtures, and distinguish them from physical multi-monitor acceptance.
 - Workers publish synchronized state; only Tkinter's thread updates widgets. Do not release native sensors from another thread while sampling is blocked.
 - FPS/LAN configuration runs through `ServiceRuntime`, off Tk. Same-target FPS saves retry a failed or ended capture but do not restart a healthy one; frame and failure publication must respect the active generation and cancellation state.
